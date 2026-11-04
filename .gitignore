@@ -1,0 +1,12 @@
+# Secrets: never commit real environment files
+.env
+.env.*
+!.env.example
+
+# Virtual environment
+.venv/
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
