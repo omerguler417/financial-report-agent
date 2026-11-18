@@ -29,7 +29,7 @@ pytest tests/test_health.py::test_health_returns_ok    # a single test
 
 ## 4. How to behave
 
-- A small fix touches one file and adds no function, endpoint, dependency or decision. Anything larger: propose a short plan and wait for approval. One approved plan covers its own steps; a new direction needs a new approval.
+- A small fix touches one source file plus its test and adds no function, endpoint, dependency or decision. Anything larger: propose a short plan and wait for approval. One approved plan covers its own steps; a new direction needs a new approval.
 - Claude commits only when the user asks and never pushes; the user pushes.
 - State assumptions before acting. If a definition, provider or rule is not settled in the docs, ask; never choose silently. Record each decision the user makes in `docs/indicator_spec.md` and keep `FEATURES` in step with it.
 - Make the smallest change that works and touch only what the task needs. Write or update the test first; when done, say how it was verified (commands and results) and what was not verified.
@@ -43,11 +43,11 @@ pytest tests/test_health.py::test_health_returns_ok    # a single test
 - Never read, print or write `.env`. When a setting is needed, give the user the exact line to add. Keys and the EDGAR contact email never go in tracked files.
 - `.env.example` must keep its name (the course requires it), but the deny rule also blocks reading it: only append to it, and ask the user to delete lines.
 - No provider defaults and no hidden fallbacks: an unconfigured service returns a setup message, never demo data.
-- No new frameworks (web, frontend or database), no database, no authentication. A library is fine when an approved step needs it (for example for PDF, Word or Excel files); pin it in `requirements.txt` and name it in the plan.
+- No new frameworks, no database, no authentication. A framework is anything that shapes how the app is structured (for example LangChain, React, Django or an ORM). A library is fine when an approved step needs it (for example for PDF, Word or Excel files); name it in the plan and pin it in `requirements.txt` in the same step.
 - No features nobody asked for; optional modules such as Piotroski and Altman are deferred.
 - Never edit a test just to make it pass, and never write a test that hides a known weakness.
-- Never bypass `PoliteClient` or a site's `robots.txt`. Yahoo Finance and Stooq forbid automated access in their `robots.txt`, so there are no adapters for them. If a chosen provider's API is blocked by its `robots.txt`, stop and ask.
-- No investment rankings, screening lists or buy/sell verdicts; ordering peer candidates by similarity is allowed. Never call a company overvalued because a multiple is higher; never claim news moved a price because the timing overlaps.
+- Never bypass `PoliteClient` or a site's `robots.txt`. Yahoo Finance and Stooq forbid automated access in their `robots.txt`, so there are no adapters for them. If a chosen provider's API is blocked by its `robots.txt`, stop and ask. At run time, a blocked source returns a clear message, like the 424 setup message, and is never skipped silently.
+- No investment rankings, screening lists, buy/sell/hold recommendations or valuation verdicts; ordering peer candidates by similarity is allowed. Never call a company over- or undervalued because a multiple is higher or lower; never claim news moved a price because the timing overlaps.
 - Never substitute another reporting period for a missing document; search snippets are not evidence.
 
 ## 6. Mistakes we have seen
