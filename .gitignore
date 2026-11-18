@@ -6,6 +6,9 @@
 # Virtual environment
 .venv/
 
+# Runtime storage: uploads, cached sources, jobs and saved reports (may be private or large)
+data/store/
+
 # Python bytecode and caches
 __pycache__/
 *.py[cod]

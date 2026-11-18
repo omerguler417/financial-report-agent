@@ -1,4 +1,4 @@
-/* Simple, readable styling for the project skeleton page. */
+/* Simple, readable styling for the page. */
 body {
   margin: 0;
   background: #f6f7f9;
@@ -8,23 +8,23 @@ body {
 }
 
 main {
-  max-width: 42rem;
+  max-width: 52rem;
   margin: 0 auto;
   padding: 2rem 1rem 3rem;
 }
 
-h1 {
-  font-size: 1.75rem;
-  margin-bottom: 1rem;
-}
+h1 { font-size: 1.75rem; margin-bottom: 1rem; }
+h2 { font-size: 1.25rem; margin-top: 2rem; }
+h3 { font-size: 1.05rem; }
+h4 { margin: 0.5rem 0; }
+ul { padding-left: 1.25rem; }
 
-h2 {
-  font-size: 1.25rem;
-  margin-top: 2rem;
-}
-
-ul {
-  padding-left: 1.25rem;
+section {
+  background: #fff;
+  border: 1px solid #e1e5ea;
+  border-radius: 6px;
+  padding: 0.25rem 1rem 1rem;
+  margin-top: 1rem;
 }
 
 .notice {
@@ -33,3 +33,27 @@ ul {
   border-left: 4px solid #d99a00;
   border-radius: 4px;
 }
+
+.hint { color: #52606d; font-size: 0.9rem; }
+.message { min-height: 1.2rem; }
+.error { color: #b42318; }
+.flag { color: #8a5a00; }
+
+form { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+input[type="text"], input[type="date"], select { padding: 0.35rem 0.5rem; border: 1px solid #c5ccd3; border-radius: 4px; }
+button { padding: 0.35rem 0.8rem; border: 1px solid #2f5d8a; background: #2f5d8a; color: #fff; border-radius: 4px; cursor: pointer; margin-left: 0.4rem; }
+button:hover { background: #244a6e; }
+progress { width: 12rem; vertical-align: middle; }
+
+.items { list-style: none; padding-left: 0; }
+.items li { padding: 0.4rem 0; border-bottom: 1px solid #eef1f4; }
+
+.tag { font-size: 0.8rem; padding: 0.1rem 0.45rem; border-radius: 3px; }
+.tag.upload { background: #e8f0fe; color: #1a4a8a; }
+.tag.official { background: #e7f6ec; color: #1d6b3a; }
+
+table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.35rem; border-bottom: 1px solid #eef1f4; }
+tr.unclear td { background: #fff8e6; }
+
+.status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: 1rem; }

@@ -1,0 +1,1 @@
+# Placeholder: Agent 2 will analyse earnings-call transcripts and recordings (including Q&A) and management's outlook, and report news published after the latest quarterly report, separating management statements from independent reporting.
