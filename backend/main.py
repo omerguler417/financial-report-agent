@@ -7,7 +7,7 @@ from pathlib import Path
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -15,8 +15,9 @@ from pydantic import BaseModel
 # Values are never printed or logged.
 load_dotenv()
 
-from backend import language, llm, peer_selection, report_reader, storage, transcription  # noqa: E402
+from backend import language, llm, peer_selection, report_reader, services, storage, transcription  # noqa: E402
 from backend.config import Settings, get_settings  # noqa: E402
+from backend.errors import ProviderNotConfigured  # noqa: E402
 from backend.fetchers import market_data  # noqa: E402
 from backend.fetchers.http_client import AccessDenied, FetchFailed, PoliteClient  # noqa: E402
 
@@ -26,7 +27,7 @@ FEATURES = {
     "working": [
         "Output language selection (English by default)",
         "Document and audio/video uploads, labelled separately from retrieved sources",
-        "Recording transcription and translation (needs OPENAI_API_KEY and FFmpeg)",
+        "Recording transcription and translation (needs a configured speech-to-text provider, a text model for translation, and FFmpeg)",
         "Background processing with progress and resume",
         "Polite fetching: per-host rate and concurrency limits, robots.txt, retries",
         "Document cache with 24-hour re-check and kept versions",
@@ -35,7 +36,7 @@ FEATURES = {
         "Peer selection from supplied candidate data",
     ],
     "awaiting_implementation": [
-        "A permitted price provider (Yahoo Finance's robots.txt refuses automated access)",
+        "Provider adapters for the services you choose later (text model, speech-to-text, market data, news)",
         "Finding reports on investor relations sites and regulator fallbacks",
         "Gathering peer candidates automatically",
         "PDF, Word and Excel text extraction",
@@ -75,6 +76,10 @@ def create_app(settings: Settings | None = None, provider_factory=None, run=None
     app = FastAPI(title="Financial Report Analysis Agent", lifespan=lifespan)
     app.state.settings, app.state.store, app.state.jobs = settings, store, jobs
 
+    @app.exception_handler(ProviderNotConfigured)
+    async def not_configured(_request, exc: ProviderNotConfigured):
+        return JSONResponse(status_code=424, content={"detail": str(exc), "needs_configuration": exc.to_dict()})
+
     @app.get("/health")
     def health():
         return {"ok": True}
@@ -85,7 +90,13 @@ def create_app(settings: Settings | None = None, provider_factory=None, run=None
 
     @app.get("/api/config")
     def config():
-        return {**settings.public_view(), "ffmpeg_available": transcription.ffmpeg_available(), "features": FEATURES}
+        return {**settings.public_view(), "ffmpeg_available": transcription.ffmpeg_available(), "features": FEATURES,
+                "services": services.service_status(settings)}
+
+    @app.get("/api/services")
+    def service_list():
+        """Each external service with its status (configured, awaiting configuration, or no adapter yet) and setup instructions. Never includes keys."""
+        return services.service_status(settings)
 
     # ---- uploads ----
 
@@ -134,6 +145,8 @@ def create_app(settings: Settings | None = None, provider_factory=None, run=None
 
     @app.post("/api/transcriptions")
     def start_transcription(req: TranscriptionRequest):
+        if provider_factory is None:
+            services.require(settings, "transcription")  # setup message before any job is created
         try:
             target = language.resolve_output_language(req.output_language, settings)
             state = jobs.create(req.upload_id, target, req.check_against)

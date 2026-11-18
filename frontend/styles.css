@@ -38,6 +38,8 @@ section {
 .message { min-height: 1.2rem; }
 .error { color: #b42318; }
 .flag { color: #8a5a00; }
+.ok { color: #1d6b3a; }
+.warn { color: #8a5a00; }
 
 form { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
 input[type="text"], input[type="date"], select { padding: 0.35rem 0.5rem; border: 1px solid #c5ccd3; border-radius: 4px; }

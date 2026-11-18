@@ -1,1 +1,1 @@
-# Placeholder: will perform all financial indicator calculations in Python (never in the language model).
+# Placeholder: will calculate the indicators defined in docs/indicator_definitions.md (v1.0) in Python, with formula, input references, unit, period, status and definition version; never in the language model.

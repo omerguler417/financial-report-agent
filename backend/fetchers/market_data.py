@@ -1,9 +1,9 @@
 # Share prices from one consistent provider, with ticker, exchange, currency, source and timestamp recorded and stale prices flagged.
-# Working: provider-independent freshness rules and the provider interface. The Yahoo connector obeys Yahoo's robots.txt, which currently refuses automated access.
+# Working: provider-independent freshness rules and the provider interface. No provider is chosen; until one is configured, price requests return a setup message.
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
 
+from backend import services
 from backend.config import Settings
 from backend.fetchers.http_client import PoliteClient
 from backend.market_calendar import calendar_for
@@ -74,46 +74,26 @@ def select_quote(series: PriceSeries, now: datetime, on_date: date | None = None
     )
 
 
-class YahooChartProvider:
-    """Yahoo Finance chart endpoint. Every request goes through PoliteClient, so robots.txt is obeyed."""
+class PriceProvider:
+    """Interface every market-data adapter implements. No provider is chosen yet; an adapter is added to ADAPTERS
+    (keyed by the MARKET_DATA_PROVIDER name) once one is selected. All its requests must go through PoliteClient."""
 
-    name = "Yahoo Finance (chart endpoint)"
-    base_url = "https://query1.finance.yahoo.com/v8/finance/chart/"
+    name = "base"
 
-    def __init__(self, client: PoliteClient):
-        self.client = client
+    def __init__(self, settings: Settings, client: PoliteClient):
+        self.settings, self.client = settings, client
 
     def daily_series(self, ticker: str, start: date, end: date) -> PriceSeries:
-        start_ts = int(datetime(start.year, start.month, start.day, tzinfo=timezone.utc).timestamp())
-        end_ts = int(datetime(end.year, end.month, end.day, tzinfo=timezone.utc).timestamp()) + 86400
-        response = self.client.get(self.base_url + ticker, params={
-            "period1": start_ts, "period2": end_ts, "interval": "1d", "events": "div,splits",
-        })
-        return self.parse(ticker, response.json())
-
-    def parse(self, ticker: str, payload: dict) -> PriceSeries:
-        chart = payload.get("chart") or {}
-        if chart.get("error") or not chart.get("result"):
-            raise PriceUnavailable(f"{self.name} returned no data for {ticker}: {chart.get('error')}")
-        result = chart["result"][0]
-        meta = result["meta"]
-        tz = ZoneInfo(meta.get("exchangeTimezoneName", "UTC"))
-        closes = result["indicators"]["quote"][0].get("close", [])
-        adjusted = (result["indicators"].get("adjclose") or [{}])[0].get("adjclose") or [None] * len(closes)
-        bars = []
-        for ts, close, adj in zip(result.get("timestamp", []), closes, adjusted):
-            if close is None:
-                continue
-            moment = datetime.fromtimestamp(ts, tz)
-            bars.append(DailyBar(moment.date(), float(close), None if adj is None else float(adj), moment))
-        return PriceSeries(ticker=meta.get("symbol", ticker), exchange=meta.get("exchangeName", ""),
-                           currency=meta.get("currency", ""), timezone=str(tz), source=self.name, bars=bars)
+        raise NotImplementedError
 
 
-def get_provider(settings: Settings, client: PoliteClient):
-    if settings.price_provider == "yahoo":
-        return YahooChartProvider(client)
-    raise PriceUnavailable(f"Unknown price provider '{settings.price_provider}'.")
+# Adapters available in the code, by provider name. Empty until a provider is chosen.
+ADAPTERS: dict[str, type[PriceProvider]] = {}
+
+
+def get_provider(settings: Settings, client: PoliteClient) -> PriceProvider:
+    services.require(settings, "market_data")  # clear setup message when unconfigured or no adapter exists
+    return ADAPTERS[settings.market_data_provider](settings, client)
 
 
 def get_closing_price(ticker: str, settings: Settings, client: PoliteClient, on_date: date | None = None,

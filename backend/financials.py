@@ -1,0 +1,1 @@
+# Placeholder: will hold extracted financial inputs with full provenance (value, unit, currency, period, publication date, source, page, consolidation scope, accounting framework, restatement status) and build TTM from non-overlapping periods.

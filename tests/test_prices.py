@@ -1,14 +1,15 @@
-# Price freshness: US holiday rules, latest completed session, stale flags, historical dates, and obeying robots.txt.
+# Price freshness (US holiday rules, latest completed session, stale flags, historical dates) and the provider-neutral price interface.
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-import httpx2
 import pytest
 
-from backend.fetchers.http_client import AccessDenied, PoliteClient
-from backend.fetchers.market_data import (DailyBar, PriceSeries, YahooChartProvider, get_closing_price, select_quote)
+from backend.errors import ProviderNotConfigured
+from backend.fetchers import market_data
+from backend.fetchers.http_client import PoliteClient
+from backend.fetchers.market_data import DailyBar, PriceSeries, get_closing_price, select_quote
 from backend.market_calendar import calendar_for, us_holidays
-from tests.helpers import FakeClock, make_settings
+from tests.helpers import make_settings
 
 NY = ZoneInfo("America/New_York")
 
@@ -67,36 +68,28 @@ def test_historical_date_on_weekend_uses_previous_session():
     assert q.price_date == "2026-11-06" and not q.stale
 
 
-CHART = {"chart": {"error": None, "result": [{
-    "meta": {"symbol": "AAPL", "currency": "USD", "exchangeName": "NMS", "exchangeTimezoneName": "America/New_York"},
-    "timestamp": [int(ny(2026, 11, 10, 9, 30).timestamp()), int(ny(2026, 11, 11, 9, 30).timestamp())],
-    "indicators": {"quote": [{"close": [350.5, None]}], "adjclose": [{"adjclose": [349.9, None]}]},
-}]}}
 
 
-def test_yahoo_payload_parsing_skips_missing_closes():
-    s = YahooChartProvider(client=None).parse("AAPL", CHART)
-    assert [(b.day, b.close, b.adjusted_close) for b in s.bars] == [(date(2026, 11, 10), 350.5, 349.9)]
-
-
-def test_provider_refusal_by_robots_txt_is_respected(tmp_path):
-    def handler(req):
-        if req.url.path == "/robots.txt":
-            return httpx2.Response(200, text="User-agent: *\nDisallow: /\n")
-        raise AssertionError("must not request a disallowed URL")
-    fc = FakeClock()
-    client = PoliteClient(make_settings(tmp_path), transport=httpx2.MockTransport(handler), sleep=fc.sleep, clock=fc.clock)
-    with pytest.raises(AccessDenied):
-        get_closing_price("AAPL", make_settings(tmp_path), client, now=ny(2026, 11, 12, 17))
-
-
-def test_price_fetch_when_allowed(tmp_path):
-    def handler(req):
-        if req.url.path == "/robots.txt":
-            return httpx2.Response(404)
-        return httpx2.Response(200, json=CHART)
-    fc = FakeClock()
+def test_unconfigured_market_data_gives_a_setup_message(tmp_path):
     settings = make_settings(tmp_path)
-    client = PoliteClient(settings, transport=httpx2.MockTransport(handler), sleep=fc.sleep, clock=fc.clock)
-    q = get_closing_price("AAPL", settings, client, now=ny(2026, 11, 11, 17))
-    assert q.price_date == "2026-11-10" and q.stale  # the Nov 11 close is missing in the data
+    with pytest.raises(ProviderNotConfigured) as exc:
+        get_closing_price("AAPL", settings, PoliteClient(settings), now=ny(2026, 11, 12, 17))
+    assert exc.value.missing == ["MARKET_DATA_PROVIDER", "MARKET_DATA_API_KEY"]
+
+
+def test_named_provider_without_an_adapter_says_so(tmp_path):
+    settings = make_settings(tmp_path, market_data_provider="someprovider", market_data_api_key="k")
+    with pytest.raises(ProviderNotConfigured, match="No adapter exists yet for provider 'someprovider'"):
+        get_closing_price("AAPL", settings, PoliteClient(settings))
+
+
+def test_a_registered_adapter_is_used_through_the_interface(tmp_path, monkeypatch):
+    class FakeAdapter(market_data.PriceProvider):
+        name = "fake prices"
+
+        def daily_series(self, ticker, start, end):
+            return series([date(2026, 11, 10), date(2026, 11, 11), date(2026, 11, 12)])
+    monkeypatch.setitem(market_data.ADAPTERS, "fake", FakeAdapter)
+    settings = make_settings(tmp_path, market_data_provider="fake", market_data_api_key="k")
+    q = get_closing_price("AAPL", settings, PoliteClient(settings), now=ny(2026, 11, 12, 17))
+    assert q.price_date == "2026-11-12" and not q.stale

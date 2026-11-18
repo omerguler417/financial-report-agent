@@ -45,12 +45,19 @@ async function loadConfig() {
   $("limit-mb").textContent = config.max_upload_mb;
   $("limit-hours").textContent = config.max_recording_hours;
 
+  const STATUS = { configured: "Configured (not yet checked live)", awaiting_configuration: "Awaiting configuration", no_adapter_yet: "No adapter yet" };
+  const byKey = Object.fromEntries(config.services.map((s) => [s.key, s]));
   const problems = [];
-  if (!config.model_configured) problems.push("No model API key is configured (add OPENAI_API_KEY to .env and restart).");
-  if (!config.ffmpeg_available) problems.push("FFmpeg is not installed (on macOS: brew install ffmpeg).");
-  $("model-status").textContent = problems.length
-    ? "Transcription cannot run yet: " + problems.join(" ")
-    : `Transcription model: ${config.transcription_model}; translation model: ${config.text_model}.`;
+  for (const key of ["transcription", "ffmpeg"]) {
+    const s = byKey[key];
+    if (s.status !== "configured") problems.push(`${s.label}: ${STATUS[s.status]}. ${s.missing.length ? "Add " + s.missing.join(", ") + ". " : ""}${s.how_to_configure}`);
+  }
+  $("model-status").textContent = problems.length ? "Transcription cannot run yet. " + problems.join(" ") : "Transcription is configured.";
+  for (const s of config.services) {
+    const li = el("li", `${s.label}: ${STATUS[s.status]}`, s.status === "configured" ? "ok" : "warn");
+    if (s.status !== "configured") li.appendChild(el("div", (s.missing.length ? "Add " + s.missing.join(", ") + " to .env. " : "") + s.how_to_configure, "hint"));
+    $("services").appendChild(li);
+  }
 
   for (const item of config.features.working) $("working").appendChild(el("li", item));
   for (const item of config.features.awaiting_implementation) $("awaiting").appendChild(el("li", item));

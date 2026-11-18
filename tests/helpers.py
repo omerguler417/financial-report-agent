@@ -7,7 +7,10 @@ from backend.config import Settings
 
 
 def make_settings(tmp_path, **overrides) -> Settings:
-    values = {"storage_dir": Path(tmp_path) / "store", "openai_api_key": "", "extra_market_closures": []}
+    values = {"storage_dir": Path(tmp_path) / "store", "extra_market_closures": [], "sec_contact_email": "",
+              "llm_provider": "", "llm_api_key": "", "llm_base_url": "", "text_model": "",
+              "transcription_provider": "", "transcription_api_key": "", "transcription_base_url": "", "transcription_model": "",
+              "market_data_provider": "", "market_data_api_key": "", "market_data_base_url": "", "news_provider": "", "news_api_key": ""}
     values.update(overrides)
     return Settings(**values)
 
@@ -53,7 +56,7 @@ class FakeProvider:
         if self.fail_on_call == self.transcribe_calls:
             raise RuntimeError("temporary transcription failure")
         n = Path(path).stem
-        return {"language": "turkish", "model": "whisper-1", "timestamps": True, "speakers": False,
+        return {"language": "turkish", "model": "test-model", "timestamps": True, "speakers": False,
                 "segments": [
                     {"start": 1.0, "end": 4.0, "text": f"Gelir yüzde 12 arttı {n}", "avg_logprob": -0.2},
                     {"start": 10.0, "end": 12.0, "text": f"belirsiz {n}", "avg_logprob": -1.5},

@@ -14,11 +14,29 @@ def client(tmp_path, monkeypatch, **overrides):
     return TestClient(app)
 
 
-def test_config_shows_defaults_and_feature_status(tmp_path, monkeypatch):
-    body = client(tmp_path, monkeypatch).get("/api/config").json()
+def test_config_shows_defaults_feature_status_and_services(tmp_path, monkeypatch):
+    c = client(tmp_path, monkeypatch, market_data_provider="someprovider", market_data_api_key="SECRET-KEY-123",
+               sec_contact_email="team@example.org")
+    body = c.get("/api/config").json()
     assert body["default_output_language"] == "en" and body["max_upload_mb"] == 500 and body["max_recording_hours"] == 4
-    assert body["model_configured"] is False and "openai_api_key" not in body
     assert body["features"]["working"] and body["features"]["awaiting_implementation"]
+    status = {s["key"]: s["status"] for s in body["services"]}
+    assert status["text_model"] == "awaiting_configuration" and status["news"] == "awaiting_configuration"
+    assert status["market_data"] == "no_adapter_yet" and status["sec_edgar"] == "configured"
+    text = c.get("/api/config").text + c.get("/api/services").text
+    assert "SECRET-KEY-123" not in text and "team@example.org" not in text   # keys and the contact never reach the browser
+
+
+def test_unconfigured_services_give_setup_messages(tmp_path, monkeypatch):
+    c = client(tmp_path, monkeypatch)
+    r = c.get("/api/prices/AAPL")
+    assert r.status_code == 424 and "MARKET_DATA_PROVIDER" in r.json()["detail"] and "MARKET_DATA_API_KEY" in r.json()["detail"]
+    live = TestClient(main.create_app(make_settings(tmp_path), background_jobs=False))   # real (unconfigured) model services
+    upload = live.post("/api/uploads", files={"file": ("call.mp3", b"x", "audio/mpeg")}).json()
+    r = live.post("/api/transcriptions", json={"upload_id": upload["id"]})
+    assert r.status_code == 424 and "TRANSCRIPTION_PROVIDER" in r.json()["detail"]
+    assert r.json()["needs_configuration"]["service"] == "Speech-to-text for recordings"
+    assert live.get("/health").json() == {"ok": True}                                  # independent features keep working
 
 
 def test_upload_list_and_delete(tmp_path, monkeypatch):
@@ -61,7 +79,7 @@ def test_reports_and_price_refusal(tmp_path, monkeypatch):
     assert c.delete("/api/reports/000000000000").status_code == 404
 
     def refuse(*args, **kwargs):
-        raise AccessDenied("https://query1.finance.yahoo.com/... is disallowed by robots.txt")
+        raise AccessDenied("https://prices.example/... is disallowed by robots.txt")
     monkeypatch.setattr(main.market_data, "get_closing_price", refuse)
     r = c.get("/api/prices/AAPL")
     assert r.status_code == 503 and "official API" in r.json()["detail"]
