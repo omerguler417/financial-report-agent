@@ -279,6 +279,12 @@ Recorded 18 November 2026. Documentation only: no code has been changed yet. Eac
 - **Agent 3 (step 4b).** Overview, disagreements (each position says who said it) and risks come from the model and are checked like every other statement. Each statement is labelled with what it rests on (Agent 1 reports, Agent 1 calculated, Agent 2 earnings call, Agent 2 news), derived from its citations. Missing information, unverified statements and limitations are built in Python.
 - **Wording checks (all agents).** A statement that gives a valuation verdict or recommendation (for example "expensive", "undervalued", "should buy") or links news to a share-price move is labelled unverified with the reason.
 
+### Decisions for step 5: the website and downloads (22 November 2026)
+
+- **Built in two parts.** 5a: run an analysis on the website and read the report. 5b: PDF (default) and Word downloads.
+- **One shared layout (`backend/report_blocks.py`).** The finished report is turned into display blocks in a fixed order: overview, disagreements, key figures (with peer medians and the sources of every figure), key figures by fiscal year, what the reports say, earnings call, news, risks, not verified, missing information, limitations. The website draws these blocks; the PDF and Word files will draw the same ones, so all three match.
+- **Demo mode is a tick box the user chooses for each analysis** (unticked by default). A demo report shows the DEMO label first and last; unverified statements are highlighted with their reasons.
+
 ## Unresolved definitions and assumptions
 
 These choices were open. Most are now resolved by `indicator_definitions.md` v1.0 (marked [x]); the rest remain open and must not be resolved silently in code.
@@ -351,7 +357,8 @@ These are not part of the original brief and are added here for review.
 | Indicator calculations, step 3: the 20 core indicators above, TTM and fiscal-year history, peer medians; formula, period, status, unit and sources on every result | Working and tested on sample and demo data (22 November 2026) |
 | Analysis pipeline, step 4a: company identification, peer choice, Agent 1 (reports read into pages, figures extracted and checked, indicators, checked summary), background progress, `POST /api/analyses`, `GET /api/analyses/{id}`, `GET /api/analyses/{id}/report` | Working and tested in demo mode (22 November 2026); live mode returns the list of services still needed (HTTP 424); not yet on the website |
 | Agents 2 and 3, step 4b: earnings call (management, guidance and analysts kept apart), news review with source details, combined report with disagreements, risks, missing information, unverified statements and limitations; wording checks | Working and tested in demo mode (22 November 2026); not yet on the website |
-| Website demo option, report view, PDF and Word export (step 5) | Awaiting implementation |
+| Website, step 5a: "Run an analysis" box (company, demo tick box, progress, choice when several companies match, list of missing services for a live run) and the report view; `GET /api/analyses/{id}/view` | Working; the layout is tested, the page itself is not yet checked in a browser (22 November 2026) |
+| PDF and Word download (step 5b) | Awaiting implementation |
 
 ### Still open
 
@@ -366,7 +373,7 @@ These are not part of the original brief and are added here for review.
 ### Code changes needed to implement v1.0 (not done yet)
 
 - Done 18 November 2026: provider-neutral settings in `backend/config.py`, `backend/llm.py`, `backend/fetchers/market_data.py`, `.env.example` (placeholders appended; the old `OPENAI_API_KEY` line must be deleted by hand because the deny rule blocks reading the file), `CLAUDE.md`; EDGAR identification setting; setup messages via `backend/services.py`.
-- `backend/report_export.py` and `backend/report_blocks.py` (step 5): still placeholders. The remaining v1.0 indicators come after the core set.
+- `backend/report_export.py` (step 5b): still a placeholder. The remaining v1.0 indicators come after the core set.
 - `backend/peer_selection.py`: add the v1.0 criteria order, the separate group for weak user-selected peers, and peer-median rules.
 - `backend/fetchers/`: IR discovery, EDGAR (CIK, 6-K inspection, identification header), amended-filing precedence, wider news relevance.
 - `backend/storage.py`: add the provenance fields (consolidation scope, accounting framework, restatement status, definition version, analysis date).

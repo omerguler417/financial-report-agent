@@ -15,7 +15,7 @@ from pydantic import BaseModel
 # Values are never printed or logged.
 load_dotenv()
 
-from backend import language, llm, peer_selection, pipeline, report_reader, services, storage, transcription  # noqa: E402
+from backend import language, llm, peer_selection, pipeline, report_blocks, report_reader, services, storage, transcription  # noqa: E402
 from backend.config import Settings, get_settings  # noqa: E402
 from backend.errors import ProviderNotConfigured, ServicesNotReady  # noqa: E402
 from backend.fetchers import market_data  # noqa: E402
@@ -37,13 +37,13 @@ FEATURES = {
         "Demo data and demo stand-ins for each service (step 1; not yet selectable on the website)",
         "Reading PDF, Word, Excel, HTML and text documents with page, section or sheet numbers, and finding the relevant pages (step 2)",
         "Core indicator calculations with sources, history and peer medians (step 3; v1.0 core set plus ROIC)",
-        "Demo analysis through the API: company, peers, Agents 1, 2 and 3 with every statement checked (steps 4a and 4b; not yet on the website)",
+        "Demo analysis on the website: company, peers, Agents 1, 2 and 3 with every statement checked, shown as a report (steps 4 and 5a)",
     ],
     "awaiting_implementation": [
         "Provider adapters for the services you choose later (text model, speech-to-text, market data, news)",
         "Finding reports on investor relations sites and regulator fallbacks",
         "Gathering peer candidates automatically",
-        "Website demo option, report view and PDF/Word export (step 5), and the remaining v1.0 indicators",
+        "PDF and Word download of the report (step 5b), and the remaining v1.0 indicators",
     ],
 }
 
@@ -87,6 +87,14 @@ def create_app(settings: Settings | None = None, provider_factory=None, run=None
     app = FastAPI(title="Financial Report Analysis Agent", lifespan=lifespan)
     analyses = pipeline.AnalysisJobs(store, settings)
     app.state.settings, app.state.store, app.state.jobs, app.state.analyses = settings, store, jobs, analyses
+
+    @app.middleware("http")
+    async def always_recheck_the_page(request: Request, call_next):
+        """The page, script and styles are re-checked on every visit, so a browser never shows an old copy after an update."""
+        response = await call_next(request)
+        if request.url.path == "/" or request.url.path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
 
     @app.exception_handler(ProviderNotConfigured)
     async def not_configured(_request, exc: ProviderNotConfigured):
@@ -221,6 +229,14 @@ def create_app(settings: Settings | None = None, provider_factory=None, run=None
     def analysis_report(job_id: str):
         try:
             return analyses.result(job_id)
+        except KeyError:
+            raise HTTPException(404, "No report yet.")
+
+    @app.get("/api/analyses/{job_id}/view")
+    def analysis_view(job_id: str):
+        """The report as display blocks, the same ones the PDF and Word files will use."""
+        try:
+            return report_blocks.build(analyses.result(job_id))
         except KeyError:
             raise HTTPException(404, "No report yet.")
 

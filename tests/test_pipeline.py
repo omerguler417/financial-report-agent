@@ -59,3 +59,30 @@ def test_unknown_analyses_give_404(tmp_path):
     assert c.get("/api/analyses/0123456789ab").status_code == 404
     assert c.get("/api/analyses/0123456789ab/report").status_code == 404
     assert c.get("/api/analyses/not-an-id").status_code == 404
+
+
+def test_progress_can_be_read_while_the_background_analysis_is_writing_it(tmp_path):
+    # the page asks for progress every second while the analysis rewrites the progress file; it must never see a half-written file
+    import threading
+    from datetime import date
+
+    from backend import pipeline
+    from backend.storage import Store
+
+    settings = make_settings(tmp_path)
+    jobs = pipeline.AnalysisJobs(Store(settings.storage_dir), settings)
+    state = jobs.create("Northgate", True, "en", [], date(2026, 11, 20))
+    stop = threading.Event()
+
+    def keep_writing():
+        while not stop.is_set():
+            jobs._save(dict(state))
+
+    writer = threading.Thread(target=keep_writing)
+    writer.start()
+    try:
+        for _ in range(2000):
+            assert jobs.get(state["id"])["id"] == state["id"]
+    finally:
+        stop.set()
+        writer.join()

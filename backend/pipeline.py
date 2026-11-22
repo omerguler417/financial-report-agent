@@ -2,6 +2,7 @@
 # This is the one place that switches between demo and live services: the demo folder is loaded only when the user picks demo mode.
 # A live analysis first checks every service it needs and lists all that are not ready (HTTP 424); it never falls back to demo data.
 import json
+import os
 import re
 import threading
 import uuid
@@ -90,6 +91,13 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _write_whole(path, data: dict):
+    """Write to a temporary file, then swap it in, so a reader never sees a half-written file."""
+    temporary = path.with_name(path.name + f".{threading.get_ident()}.tmp")
+    temporary.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
+    os.replace(temporary, path)
+
+
 class AnalysisJobs:
     def __init__(self, store: Store, settings: Settings):
         self.store, self.settings = store, settings
@@ -117,7 +125,7 @@ class AnalysisJobs:
 
     def _save(self, state: dict):
         state["updated_at"] = _now()
-        self._path(state["id"]).write_text(json.dumps(state, indent=2), encoding="utf-8")
+        _write_whole(self._path(state["id"]), state)
 
     def create(self, query: str, demo: bool, output_language: str, user_peers: list[str], as_of: date) -> dict:
         services = self.services_for(demo)  # a live analysis stops here with the full list of services it still needs
@@ -173,7 +181,7 @@ class AnalysisJobs:
             report = {"id": job_id, "mode": "demo" if state["demo"] else "live", "demo_label": getattr(services, "label", None),
                       "company": company, "analysis_date": state["as_of"], "output_language": state["output_language"],
                       "created_at": _now(), "peers": peers, "agent1": agent1, "agent2": agent2, "agent3": agent3, "notes": notes}
-            self._path(job_id, "report.json").write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
+            _write_whole(self._path(job_id, "report.json"), report)
             state["status"] = "completed"
             self._step(state, "save", done=True)
         except Exception as exc:

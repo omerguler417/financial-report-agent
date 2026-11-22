@@ -1,4 +1,5 @@
-// Page interactions: output language, uploads with progress, transcription jobs with progress and resume, price check, saved reports.
+// Page interactions: company analysis with progress and the report view, output language, uploads with progress,
+// transcription jobs with progress and resume, price check, saved reports.
 const $ = (id) => document.getElementById(id);
 const jobs = {}; // job id -> latest state
 let config = null;
@@ -208,6 +209,133 @@ async function loadReports() {
   }
 }
 
+// ---- company analysis and report view ----
+
+const STEP_NAMES = { queued: "Waiting to start", identify: "Finding the company", peers: "Choosing peers",
+  agent1: "Agent 1: reports and indicators", agent2: "Agent 2: earnings call and news", agent3: "Agent 3: combined report", save: "Saving" };
+
+async function runAnalysis(event, company) {
+  if (event) event.preventDefault();
+  const box = $("analysis-status");
+  const query = company || $("company").value.trim();
+  box.replaceChildren(el("p", "Starting…"));
+  $("report-section").hidden = true;
+  const response = await fetch("/api/analyses", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ company: query, demo: $("demo-mode").checked, output_language: $("language").value }),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (response.status === 409) {  // several companies match: let the user choose
+    box.replaceChildren(el("p", body.detail));
+    for (const c of body.candidates) box.appendChild(button(`${c.name} (${c.ticker})`, () => runAnalysis(null, c.ticker)));
+    return;
+  }
+  if (response.status === 424) {  // live analysis: list every service still needed
+    box.replaceChildren(el("p", body.detail, "warn"));
+    const list = el("ul");
+    for (const item of body.needs_configuration) list.appendChild(el("li", `${item.service}: ${item.how_to_configure}`));
+    box.appendChild(list);
+    return;
+  }
+  if (!response.ok || !body.id) {
+    box.replaceChildren(el("p", body.detail || `Request failed (${response.status})`, "error"));
+    return;
+  }
+  pollAnalysis(body.id);
+}
+
+async function pollAnalysis(id, failures = 0) {
+  const box = $("analysis-status");
+  let state;
+  try {
+    state = await api(`/api/analyses/${id}`);
+  } catch (e) {  // a failed progress check is retried a few times instead of leaving the page waiting
+    if (failures < 5) setTimeout(() => pollAnalysis(id, failures + 1), 1000);
+    else box.replaceChildren(el("p", `Could not get the progress: ${e.message}`, "error"));
+    return;
+  }
+  const bar = el("progress");
+  bar.max = 100;
+  bar.value = state.progress_percent;
+  box.replaceChildren(el("span", `${state.company.name} (${state.company.ticker}): ${STEP_NAMES[state.current_step] || state.current_step} `), bar);
+  if (state.status === "failed") box.appendChild(el("p", `Failed: ${state.error}`, "error"));
+  else if (state.status === "completed") showReport(id);
+  else setTimeout(() => pollAnalysis(id), 1000);
+}
+
+function sourcesLine(sources) {
+  const line = el("div", null, "sources");
+  line.appendChild(el("span", "Source: "));
+  sources.forEach((s, i) => {
+    if (i) line.appendChild(el("span", "; "));
+    if (s.url) {
+      const a = el("a", s.text);
+      a.href = s.url;
+      a.target = "_blank";
+      a.rel = "noopener";
+      line.appendChild(a);
+    } else line.appendChild(el("span", s.text));
+  });
+  return line;
+}
+
+function renderBlock(block) {
+  switch (block.type) {
+    case "banner": return el("div", block.text, "banner");
+    case "heading": return el(`h${Math.min(block.level + 1, 4)}`, block.text, block.level === 1 ? "report-title" : "");
+    case "paragraph": return el("p", block.text);
+    case "statements": {
+      const list = el("ul", null, "statements");
+      if (!block.items.length) list.appendChild(el("li", "Nothing to show.", "hint"));
+      for (const item of block.items) {
+        const li = el("li", null, item.label === "unverified" ? "unverified" : "");
+        if (item.tag) li.appendChild(el("div", item.tag, "tag-line"));
+        if (item.label === "unverified") li.appendChild(el("span", "Unverified", "badge"));
+        li.appendChild(el("span", item.text));
+        if (item.sources.length) li.appendChild(sourcesLine(item.sources));
+        for (const issue of item.issues) li.appendChild(el("div", issue, "issue"));
+        list.appendChild(li);
+      }
+      return list;
+    }
+    case "table": {
+      const wrap = el("div", null, "table-wrap");
+      const table = el("table");
+      const head = el("tr");
+      for (const c of block.columns) head.appendChild(el("th", c));
+      table.appendChild(head);
+      for (const row of block.rows) {
+        const tr = el("tr");
+        for (const cell of row) tr.appendChild(el("td", cell));
+        table.appendChild(tr);
+      }
+      wrap.appendChild(table);
+      for (const note of block.notes || []) wrap.appendChild(el("p", note, "hint"));
+      return wrap;
+    }
+    case "list": {
+      const wrap = el("div");
+      if (block.title) wrap.appendChild(el("h4", block.title));
+      const list = el("ul", null, block.style === "warn" ? "warn-list" : "");
+      for (const item of block.items) list.appendChild(el("li", item));
+      wrap.appendChild(list);
+      return wrap;
+    }
+    default: return el("p", block.text || "");
+  }
+}
+
+async function showReport(id) {
+  const view = await api(`/api/analyses/${id}/view`);
+  const box = $("report");
+  box.replaceChildren(...view.blocks.map(renderBlock));
+  if (view.demo_label) box.appendChild(el("div", view.demo_label, "banner"));  // the label at the end as well as the top
+  $("report-section").hidden = false;
+  $("report-section").scrollIntoView({ behavior: "smooth" });
+}
+
+$("analysis-form").addEventListener("submit", runAnalysis);
 $("upload-form").addEventListener("submit", upload);
 $("price-form").addEventListener("submit", checkPrice);
 loadConfig().then(loadFiles).then(loadReports).catch((e) => { $("upload-message").textContent = e.message; });
