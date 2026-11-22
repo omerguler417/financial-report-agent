@@ -91,6 +91,7 @@ def test_failed_job_resumes_without_repeating_completed_parts(tmp_path, monkeypa
 
 def test_missing_ffmpeg_fails_with_install_instructions(tmp_path, monkeypatch):
     store, jobs, _ = make_jobs(tmp_path, FakeProvider(), monkeypatch)
+    jobs.run = transcription.subprocess.run   # the real runner is the one that needs FFmpeg installed
     monkeypatch.setattr(transcription, "ffmpeg_available", lambda: False)
     rec = store.save_upload(io.BytesIO(b"audio"), "call.mp3", "audio/mpeg")
     state = jobs.start(jobs.create(rec["id"], "en")["id"], background=False)

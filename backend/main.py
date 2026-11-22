@@ -34,6 +34,7 @@ FEATURES = {
         "Temporary-file cleanup after 7 days; saved reports kept until deleted",
         "Price freshness rules for US exchanges",
         "Peer selection from supplied candidate data",
+        "Demo data and demo stand-ins for each service (step 1; not yet selectable on the website)",
     ],
     "awaiting_implementation": [
         "Provider adapters for the services you choose later (text model, speech-to-text, market data, news)",

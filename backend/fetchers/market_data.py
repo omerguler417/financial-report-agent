@@ -15,6 +15,7 @@ class DailyBar:
     close: float
     adjusted_close: float | None
     timestamp: datetime
+    volume: float | None = None  # shares traded; used for the trading-liquidity indicators
 
 
 @dataclass

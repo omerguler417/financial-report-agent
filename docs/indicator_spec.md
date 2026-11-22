@@ -316,6 +316,7 @@ These are not part of the original brief and are added here for review.
 | Document cache, 24-hour re-check, versions, 7-day temporary cleanup, saved-report copies and deletion | Working |
 | Price freshness rules (US exchange holidays, latest completed session, stale flag) | Working |
 | Peer selection engine (criteria, origins, verification, user picks, index filter) | Working on supplied candidate data |
+| Demo mode, step 1: fictional sample data (5 `.DEMO` companies, reports with page numbers, prices, news, call transcript, recorded Turkish call) and demo stand-ins for market data, news, documents, speech-to-text and translation | Working and tested (22 November 2026); not yet selectable on the website; text-model demo answers come with the agents (step 4) |
 | Price retrieval | Awaiting configuration: no market-data provider chosen; requests return a setup message (the Yahoo adapter and default were removed on 18 November 2026) |
 | Finding reports on investor relations sites; regulator fallbacks | Awaiting implementation |
 | Gathering peer candidates from a provider and from official reports | Awaiting implementation |

@@ -32,26 +32,27 @@ def ffmpeg_available() -> bool:
     return shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
 
 
-def _require_ffmpeg():
-    if not ffmpeg_available():
+def _require_ffmpeg(run=subprocess.run):
+    """Only the real runner needs FFmpeg installed; a stand-in runner (tests, demo mode) replaces it."""
+    if run is subprocess.run and not ffmpeg_available():
         raise FFmpegMissing("FFmpeg is not installed, so recordings cannot be processed. On macOS run: brew install ffmpeg")
 
 
 def probe_duration(path: Path, run=subprocess.run) -> float:
-    _require_ffmpeg()
+    _require_ffmpeg(run)
     out = run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", str(path)],
               capture_output=True, text=True, check=True)
     return float(out.stdout.strip())
 
 
 def extract_audio(src: Path, dst: Path, run=subprocess.run) -> None:
-    _require_ffmpeg()
+    _require_ffmpeg(run)
     run(["ffmpeg", "-y", "-v", "error", "-i", str(src), "-vn", "-ac", "1", "-ar", "16000", "-b:a", "64k", str(dst)],
         check=True, capture_output=True)
 
 
 def cut_chunk(audio: Path, start: float, length: float, dst: Path, run=subprocess.run) -> None:
-    _require_ffmpeg()
+    _require_ffmpeg(run)
     run(["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.3f}", "-t", f"{length:.3f}", "-i", str(audio),
          "-ac", "1", "-ar", "16000", "-b:a", "64k", str(dst)], check=True, capture_output=True)
 
