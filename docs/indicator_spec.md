@@ -253,6 +253,32 @@ Recorded 18 November 2026. Documentation only: no code has been changed yet. Eac
 - **Providers.** Providers and API credentials stay configurable and are chosen later. The application must clearly distinguish working integrations, integrations awaiting configuration, and demo data.
 - **EDGAR contact.** Stored only in the local `.env` as `SEC_CONTACT_EMAIL` (loaded automatically at start-up); `.env.example` holds a placeholder; the User-Agent is built from configuration (`SEC_APP_NAME` + `SEC_CONTACT_EMAIL`).
 
+### Decisions for step 3: indicator calculations (22 November 2026)
+
+- **Core set built first.** P/E, P/S, P/B, P/FCF, EV/EBITDA, FCF yield; debt/equity, net debt/equity, net debt/EBITDA, current ratio, interest coverage; common ROE, group ROA, ROIC, net profit margin, EBITDA margin; revenue growth, FCF earnings conversion, five-year FCF earnings conversion; book value per share. The rest of v1.0 sections 5–8 comes later.
+- **ROIC tax rate.** NOPAT = EBIT × (1 − the statutory tax rate of the company's home country). The rate is taken from the company's own report (tax note), cited with document and page; it is never borrowed from another year. For US companies this is the 21% federal statutory rate, with state taxes excluded. If the report does not state the rate, ROIC is `missing`. No tax benefit is assumed on an operating loss.
+- **FCF.** Until cash interest paid and lease principal are extracted, comparative FCF is reported FCF (CFO − capex), labelled as such (v1.0 permits this fallback).
+- **Enterprise value.** NCI at book value, disclosed as a proxy. Preferred capital is added at book value when the balance sheet shows it; when it shows no preferred line, none is added and the note says so.
+- **Price.** The closing price of the latest completed trading session on or before the analysis date.
+- **Banks and insurers (decided 22 November 2026).** `not_applicable`: EV/EBITDA, net debt/EBITDA, current ratio, P/FCF, FCF yield, both FCF conversions, EBITDA margin, ROIC, debt/equity, net debt/equity and interest coverage. Funding is part of their business model (v1.0 section 8); the report says why for each one. P/E, P/S, P/B, common ROE, group ROA, net margin, revenue growth and book value per share are still calculated.
+- **History and peers.** Indicators that need no share price are also calculated for each fiscal year. Multiples at past year ends (historical multiple medians) come later. Peer medians use only `calculated` values and say how many there are. Multiples are compared as a peer discount (1 − company ÷ peer median); ROE, ROA, ROIC and margins as percentage-point differences; book value per share is not compared across companies.
+- **Demo data.** Each demo annual report has a tax note stating the fictional 21% statutory rate. A prior-year Q3 report is added so its balance sheet can open the trailing-twelve-month averages.
+
+### Decisions for step 4: agents and pipeline (22 November 2026)
+
+- **Built in two parts.** 4a: pipeline, Agent 1, checks and API endpoints. 4b: Agent 2 and Agent 3.
+- **No general "ask" function for live text models yet.** The existing optional adapter can still only transcribe and translate. A live analysis reports that the text model "cannot yet run the analysis tasks" (HTTP 424) until a provider is chosen and its adapter gets that part. Demo mode uses recorded answers.
+- **Providers wait for the API stage (decided 22 November 2026).** No provider is chosen or paid for now. The professor will supply the providers and API keys at the API stage; each then gets its adapter (text model with the analysis tasks, market data, news, speech-to-text). Using the Claude API as the text model was considered and deferred to that stage.
+- **One switch point for demo mode.** `backend/pipeline.py` loads `backend/demo/` only when the user picks demo mode for the analysis. A live analysis first checks every service it needs and lists all that are not ready (HTTP 424), including report discovery, which is not built yet. It never falls back to demo data.
+- **Checks before anything is used (`backend/validation.py`).** A figure the model extracts is used only if its line is on the page it cites and the value matches; otherwise it is rejected with the reason. Two documents giving different values for the same figure and period are both left out until precedence is clear. A model statement must cite a document page or a calculated result. Any number in it must appear in that source or match that result, otherwise it is labelled "unverified" (kept, not dropped).
+- **Company identification.** An exact ticker wins; one match is used; several matches are returned to the user to choose from (HTTP 409); no match gives HTTP 404.
+- **Analysis date.** Saved with each analysis; reports published after it are left out and listed in the notes.
+- **Business model.** Bank or insurer treatment is taken from the industry classification, never from the company's name.
+- **Demo answers.** Recorded in `backend/demo/demo_answers.py`. Four contain deliberate mistakes so the checks can be seen working: a figure cited to the wrong page and a growth rate that differs from Python's (Agent 1), a news assessment claiming the news moved the share price (Agent 2), and a valuation verdict (Agent 3).
+- **Agent 2 (step 4b).** Earnings-call statements are typed as management, guidance or analyst; the speaker must appear on the cited page. News: items since the latest results announcement (the newest report's publication date), plus older items only when judged still material; items after the analysis date are left out. Publisher, date and link come from the news source, never from the model; irrelevant items are listed with the reason.
+- **Agent 3 (step 4b).** Overview, disagreements (each position says who said it) and risks come from the model and are checked like every other statement. Each statement is labelled with what it rests on (Agent 1 reports, Agent 1 calculated, Agent 2 earnings call, Agent 2 news), derived from its citations. Missing information, unverified statements and limitations are built in Python.
+- **Wording checks (all agents).** A statement that gives a valuation verdict or recommendation (for example "expensive", "undervalued", "should buy") or links news to a share-price move is labelled unverified with the reason.
+
 ## Unresolved definitions and assumptions
 
 These choices were open. Most are now resolved by `indicator_definitions.md` v1.0 (marked [x]); the rest remain open and must not be resolved silently in code.
@@ -320,8 +346,12 @@ These are not part of the original brief and are added here for review.
 | Price retrieval | Awaiting configuration: no market-data provider chosen; requests return a setup message (the Yahoo adapter and default were removed on 18 November 2026) |
 | Finding reports on investor relations sites; regulator fallbacks | Awaiting implementation |
 | Gathering peer candidates from a provider and from official reports | Awaiting implementation |
-| PDF, Word and Excel text extraction | Awaiting implementation (plain text and HTML work) |
-| Agents 1, 2 and 3, indicator calculations, final PDF/Word report | Awaiting implementation |
+| Reading documents with page numbers, step 2: PDF pages, Word sections, Excel sheets, HTML page breaks or sections, text form-feed pages or sections; tables as text rows; scanned PDFs and unreadable files reported with a note (no OCR) | Working and tested (22 November 2026) |
+| Finding the relevant pages for a question (keyword ranking, BM25, in Python; each passage keeps its document and page) | Working and tested (22 November 2026) |
+| Indicator calculations, step 3: the 20 core indicators above, TTM and fiscal-year history, peer medians; formula, period, status, unit and sources on every result | Working and tested on sample and demo data (22 November 2026) |
+| Analysis pipeline, step 4a: company identification, peer choice, Agent 1 (reports read into pages, figures extracted and checked, indicators, checked summary), background progress, `POST /api/analyses`, `GET /api/analyses/{id}`, `GET /api/analyses/{id}/report` | Working and tested in demo mode (22 November 2026); live mode returns the list of services still needed (HTTP 424); not yet on the website |
+| Agents 2 and 3, step 4b: earnings call (management, guidance and analysts kept apart), news review with source details, combined report with disagreements, risks, missing information, unverified statements and limitations; wording checks | Working and tested in demo mode (22 November 2026); not yet on the website |
+| Website demo option, report view, PDF and Word export (step 5) | Awaiting implementation |
 
 ### Still open
 
@@ -336,7 +366,7 @@ These are not part of the original brief and are added here for review.
 ### Code changes needed to implement v1.0 (not done yet)
 
 - Done 18 November 2026: provider-neutral settings in `backend/config.py`, `backend/llm.py`, `backend/fetchers/market_data.py`, `.env.example` (placeholders appended; the old `OPENAI_API_KEY` line must be deleted by hand because the deny rule blocks reading the file), `CLAUDE.md`; EDGAR identification setting; setup messages via `backend/services.py`.
-- `backend/indicators.py`, `backend/validation.py`, `backend/retrieval.py`, the three agents, `backend/pipeline.py`, `backend/report_export.py`: still placeholders; build them to v1.0.
+- `backend/report_export.py` and `backend/report_blocks.py` (step 5): still placeholders. The remaining v1.0 indicators come after the core set.
 - `backend/peer_selection.py`: add the v1.0 criteria order, the separate group for weak user-selected peers, and peer-median rules.
 - `backend/fetchers/`: IR discovery, EDGAR (CIK, 6-K inspection, identification header), amended-filing precedence, wider news relevance.
 - `backend/storage.py`: add the provenance fields (consolidation scope, accounting framework, restatement status, definition version, analysis date).

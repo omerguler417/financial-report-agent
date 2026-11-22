@@ -8,3 +8,11 @@ class ProviderNotConfigured(Exception):
 
     def to_dict(self) -> dict:
         return {"service": self.service, "missing": self.missing, "how_to_configure": self.how}
+
+
+class ServicesNotReady(Exception):
+    """A live analysis needs several services and at least one is not ready. Lists all of them at once (HTTP 424)."""
+
+    def __init__(self, items: list[dict]):
+        self.items = items
+        super().__init__("A live analysis needs services that are not ready yet: " + "; ".join(i["service"] for i in items) + ".")

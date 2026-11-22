@@ -11,6 +11,7 @@ MARKET_NAME = "DEMO market data (fictional)"
 NEWS_PUBLISHER = "Demo Wire (fictional)"
 LATEST_RESULTS_ANNOUNCEMENT = "2026-10-28"
 YEARS = [2021, 2022, 2023, 2024, 2025]
+STATUTORY_TAX_RATE = 21.0  # stated in each annual report's tax note; ROIC uses the home-country rate the report states
 
 _OIL = dict(industry="Oil & Gas Integrated", sector="Energy", products=["crude oil", "natural gas"], customers=["refiners", "utilities"],
             segments=["upstream", "midstream", "downstream"], operating_model="integrated", regions={"North America": 0.7, "Europe": 0.3})
@@ -45,6 +46,7 @@ LABELS = {
     "cash_eligible": "Cash and cash equivalents (unrestricted)", "debt_ex_leases": "Total borrowings", "lease_liabilities": "Lease liabilities",
     "equity_common": "Equity attributable to common shareholders", "nci": "Noncontrolling interests", "equity_total": "Total equity",
     "shares_outstanding": "Common shares outstanding (millions)",
+    "statutory_tax_rate": "U.S. federal statutory income tax rate (%)",
 }
 INCOME = ["revenue", "ebit", "depreciation_amortisation", "interest_expense", "pretax_income", "income_tax", "net_income_group",
           "nci_share_of_income", "net_income_common"]
@@ -85,7 +87,7 @@ def _balance(c: dict, revenue: float, shares: float) -> dict:
 
 
 def financials(ticker: str) -> dict:
-    """Annual figures FY2021–FY2025 and year-to-date Q3 2026 / Q3 2025, in USD millions (shares in millions)."""
+    """Annual figures FY2021–FY2025 and year-to-date Q3 2026 / Q3 2025 (each with its period-end balance sheet), in USD millions (shares in millions)."""
     c = COMPANIES[ticker]
     annual, revenue = {}, c["rev0"]
     for i, year in enumerate(YEARS):
@@ -99,7 +101,9 @@ def financials(ticker: str) -> dict:
     rev_next = fy25["revenue"] * (1 + c["growth"][-1])
     cur = {**_flows(c, rev_next * 0.75, c["margin"], fy25["debt_ex_leases"] * 0.75),
            **_balance(c, fy25["revenue"] * 1.03, fy25["shares_outstanding"] * 0.995)}
-    prev = _flows(c, fy25["revenue"] * 0.75, c["margin"], fy25["debt_ex_leases"] * 0.75)
+    fy24 = annual["FY2024"]
+    prev = {**_flows(c, fy25["revenue"] * 0.75, c["margin"], fy25["debt_ex_leases"] * 0.75),
+            **_balance(c, fy24["revenue"] * 1.03, fy24["shares_outstanding"] * 0.995)}
     return {"annual": annual, "ytd": {"YTD Q3 2026": cur, "YTD Q3 2025": prev}}
 
 
@@ -159,10 +163,21 @@ def _documents(ticker: str) -> tuple[list[dict], list[dict]]:
         cover = f"{DEMO_LABEL}\nANNUAL REPORT (Form 10-K) for the fiscal year ended December 31, {year}\n{c['name']}"
         mdna = ("MANAGEMENT'S DISCUSSION AND ANALYSIS\n"
                 f"Revenue was {v['revenue']:,.1f} million in {year}.\nCommodity price volatility remains the main risk to results.")
-        add("annual_report", f"Annual report FY{year}", label, published, [cover, _business_page(ticker), income, balance, cash, mdna],
-            {3: e3, 4: e4, 5: e5})
+        tax_line = _line("statutory_tax_rate", label, STATUTORY_TAX_RATE)
+        tax = ("NOTES TO THE FINANCIAL STATEMENTS\nNote 9. Income taxes\n"
+               "The company is incorporated and headquartered in the United States.\n" + tax_line)
+        add("annual_report", f"Annual report FY{year}", label, published, [cover, _business_page(ticker), income, balance, cash, mdna, tax],
+            {3: e3, 4: e4, 5: e5, 7: [("statutory_tax_rate", label, STATUTORY_TAX_RATE, tax_line)]})
 
     cur, prev = f["ytd"]["YTD Q3 2026"], f["ytd"]["YTD Q3 2025"]
+    # Prior-year Q3 report: its balance sheet is the opening balance for trailing-twelve-month averages.
+    p25 = [("YTD Q3 2025", "2025-01-01", "2025-09-30", "2025-10-28", prev)]
+    income, e2 = _statement("CONDENSED STATEMENT OF INCOME", INCOME, p25)
+    balance, e3 = _statement("CONDENSED BALANCE SHEET", BALANCE, p25)
+    cash, e4 = _statement("CONDENSED STATEMENT OF CASH FLOWS", CASHFLOW, p25)
+    cover = f"{DEMO_LABEL}\nQUARTERLY REPORT (Form 10-Q) for the quarter ended September 30, 2025\n{c['name']}"
+    add("quarterly_report", "Quarterly report Q3 2025", "Q3 2025", "2025-10-28", [cover, income, balance, cash], {2: e2, 3: e3, 4: e4})
+
     periods = [("YTD Q3 2026", "2026-01-01", "2026-09-30", LATEST_RESULTS_ANNOUNCEMENT, cur),
                ("YTD Q3 2025", "2025-01-01", "2025-09-30", "2025-10-28", prev)]
     income, e2 = _statement("CONDENSED STATEMENT OF INCOME", INCOME, periods)

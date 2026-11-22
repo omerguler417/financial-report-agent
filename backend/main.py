@@ -15,9 +15,9 @@ from pydantic import BaseModel
 # Values are never printed or logged.
 load_dotenv()
 
-from backend import language, llm, peer_selection, report_reader, services, storage, transcription  # noqa: E402
+from backend import language, llm, peer_selection, pipeline, report_reader, services, storage, transcription  # noqa: E402
 from backend.config import Settings, get_settings  # noqa: E402
-from backend.errors import ProviderNotConfigured  # noqa: E402
+from backend.errors import ProviderNotConfigured, ServicesNotReady  # noqa: E402
 from backend.fetchers import market_data  # noqa: E402
 from backend.fetchers.http_client import AccessDenied, FetchFailed, PoliteClient  # noqa: E402
 
@@ -35,13 +35,15 @@ FEATURES = {
         "Price freshness rules for US exchanges",
         "Peer selection from supplied candidate data",
         "Demo data and demo stand-ins for each service (step 1; not yet selectable on the website)",
+        "Reading PDF, Word, Excel, HTML and text documents with page, section or sheet numbers, and finding the relevant pages (step 2)",
+        "Core indicator calculations with sources, history and peer medians (step 3; v1.0 core set plus ROIC)",
+        "Demo analysis through the API: company, peers, Agents 1, 2 and 3 with every statement checked (steps 4a and 4b; not yet on the website)",
     ],
     "awaiting_implementation": [
         "Provider adapters for the services you choose later (text model, speech-to-text, market data, news)",
         "Finding reports on investor relations sites and regulator fallbacks",
         "Gathering peer candidates automatically",
-        "PDF, Word and Excel text extraction",
-        "Agents 1, 2 and 3, indicator calculations and the final PDF/Word report",
+        "Website demo option, report view and PDF/Word export (step 5), and the remaining v1.0 indicators",
     ],
 }
 
@@ -50,6 +52,14 @@ class TranscriptionRequest(BaseModel):
     upload_id: str
     output_language: str | None = None
     check_against: list[str] = []
+
+
+class AnalysisRequest(BaseModel):
+    company: str
+    demo: bool = False  # demo mode is chosen by the user for the whole analysis
+    output_language: str | None = None
+    peers: list[str] = []
+    as_of: date | None = None  # analysis date; reports published later are left out
 
 
 class PeerRequest(BaseModel):
@@ -75,11 +85,16 @@ def create_app(settings: Settings | None = None, provider_factory=None, run=None
         yield
 
     app = FastAPI(title="Financial Report Analysis Agent", lifespan=lifespan)
-    app.state.settings, app.state.store, app.state.jobs = settings, store, jobs
+    analyses = pipeline.AnalysisJobs(store, settings)
+    app.state.settings, app.state.store, app.state.jobs, app.state.analyses = settings, store, jobs, analyses
 
     @app.exception_handler(ProviderNotConfigured)
     async def not_configured(_request, exc: ProviderNotConfigured):
         return JSONResponse(status_code=424, content={"detail": str(exc), "needs_configuration": exc.to_dict()})
+
+    @app.exception_handler(ServicesNotReady)
+    async def services_not_ready(_request, exc: ServicesNotReady):
+        return JSONResponse(status_code=424, content={"detail": str(exc), "needs_configuration": exc.items})
 
     @app.get("/health")
     def health():
@@ -179,6 +194,35 @@ def create_app(settings: Settings | None = None, provider_factory=None, run=None
             return jobs.result(job_id)
         except KeyError:
             raise HTTPException(404, "No result yet.")
+
+    # ---- analyses (identify, peers, Agents 1-3) ----
+
+    @app.post("/api/analyses")
+    def start_analysis(req: AnalysisRequest):
+        try:
+            target = language.resolve_output_language(req.output_language, settings)
+            state = analyses.create(req.company, req.demo, target, req.peers, req.as_of or date.today())
+        except language.UnsupportedLanguage as exc:
+            raise HTTPException(400, str(exc))
+        except pipeline.CompanyNotFound as exc:
+            raise HTTPException(404, str(exc))
+        except pipeline.AmbiguousCompany as exc:
+            return JSONResponse(status_code=409, content={"detail": str(exc), "candidates": exc.candidates})
+        return analyses.start(state["id"], background=background_jobs)
+
+    @app.get("/api/analyses/{job_id}")
+    def analysis_status(job_id: str):
+        try:
+            return analyses.get(job_id)
+        except KeyError:
+            raise HTTPException(404, "Analysis not found.")
+
+    @app.get("/api/analyses/{job_id}/report")
+    def analysis_report(job_id: str):
+        try:
+            return analyses.result(job_id)
+        except KeyError:
+            raise HTTPException(404, "No report yet.")
 
     # ---- saved reports and maintenance ----
 

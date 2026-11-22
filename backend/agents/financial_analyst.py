@@ -1,1 +1,107 @@
-# Placeholder: Agent 1 will summarise the written reports, calculate the selected indicators in Python, and compare the company's valuation with its own history and with its peers.
+# Agent 1: reads the company's reports into numbered pages, has the text model copy out the figures and summarise the reports (both
+# checked in backend/validation.py), and calculates the indicators, history and peer medians in Python (backend/indicators.py).
+# The model never calculates. Documents published after the analysis date are left out.
+from datetime import date
+
+from backend import financials, indicators, prompts, report_reader, retrieval, validation
+
+AGENT = "Agent 1 – reports and indicators"
+REPORT_KINDS = {"annual_report", "quarterly_report"}
+EXTRACTION_QUERIES = [
+    "consolidated statement of income revenues operating income net income attributable interest expense taxes",
+    "balance sheet total assets current liabilities borrowings lease liabilities equity noncontrolling shares outstanding cash",
+    "statement of cash flows operating activities capital expenditures dividends paid depreciation amortisation",
+    "income taxes statutory tax rate",
+]
+SUMMARY_QUERY = "business segments products customers regions management discussion revenue outlook expects risk"
+
+
+def read_reports(documents: list[dict], as_of: date) -> tuple[dict, list[dict], list[str]]:
+    """Reports published on or before `as_of`, read into pages. Returns ({doc_id: {doc, pages}}, document list, notes)."""
+    read, listed, notes = {}, [], []
+    for doc in documents:
+        if doc.get("kind") not in REPORT_KINDS:
+            continue
+        if doc.get("publication_date") and doc["publication_date"] > as_of.isoformat():
+            notes.append(f"{doc['title']} was published on {doc['publication_date']}, after the analysis date, so it is not yet published "
+                         "for this analysis and is left out.")
+            continue
+        if "pages" in doc:
+            pages = report_reader.pages_from_texts(doc["pages"])
+        else:
+            result = report_reader.try_read_document(doc["path"])
+            pages = result.pages
+            notes += result.notes
+        meta = {k: v for k, v in doc.items() if k not in ("pages", "path")}
+        read[doc["doc_id"]] = {"doc": meta, "pages": pages}
+        listed.append(meta)
+    return read, listed, notes
+
+
+def _passages(read: dict, queries: list[str], per_query: int) -> list[dict]:
+    pages = {doc_id: item["pages"] for doc_id, item in read.items()}
+    chosen = {}
+    for doc_id in pages:
+        for query in queries:
+            for p in retrieval.retrieve({doc_id: pages[doc_id]}, query, k=per_query):
+                chosen[(p.doc_id, p.page)] = {"doc_id": p.doc_id, "page": p.page, "label": p.label, "text": p.text}
+    return [chosen[k] for k in sorted(chosen)]
+
+
+def company_inputs(company: dict, services, as_of: date, demo_label: str | None = None) -> tuple:
+    """Figures for one company, checked and turned into calculation inputs. Returns (inputs, read, documents, check, notes)."""
+    read, documents, notes = read_reports(services.documents.find(company["ticker"]), as_of)
+    request = prompts.build("extract_figures", {"ticker": company["ticker"], "company": company["name"], "fields": financials.FIELDS,
+                                                "pages": _passages(read, EXTRACTION_QUERIES, 2)})
+    answer = services.model.ask(request["task"], request["data"])
+    check = validation.check_figures(answer.get("figures", []), read)
+    price = financials.closing_price(services.market, company["ticker"], as_of, demo=bool(demo_label))
+    model = financials.business_model(services.market.profile(company["ticker"]))
+    inputs = financials.build_inputs(company["name"], check["accepted"], price, model, demo_label)
+    return inputs, read, documents, check, notes
+
+
+def _results(analysis: dict) -> list[dict]:
+    rows = [r.to_dict() for r in analysis["current"]]
+    return rows + [r.to_dict() for fy in analysis["history"].values() for r in fy]
+
+
+def run(company: dict, peer_selection: dict, services, as_of: date, context: dict | None = None) -> dict:
+    """context, when given, receives what Agent 3 needs to check its citations: the pages read and the calculated results."""
+    demo_label = getattr(services, "label", None)
+    inputs, read, documents, check, notes = company_inputs(company, services, as_of, demo_label)
+    analysis = indicators.analyse(inputs)
+
+    peer_analyses = {}
+    for peer in peer_selection.get("peers", []):
+        try:
+            peer_inputs = company_inputs({"ticker": peer["ticker"], "name": peer["name"]}, services, as_of, demo_label)[0]
+            peer_analyses[peer["ticker"]] = indicators.analyse(peer_inputs)
+        except Exception as exc:  # one peer's missing data must not stop the analysis; it is reported instead
+            notes.append(f"Peer {peer['ticker']} could not be analysed: {exc}")
+    comparison = indicators.compare_with_peers(analysis, peer_analyses) if peer_analyses else []
+
+    results = _results(analysis) + [
+        {"indicator": row["indicator"], "name": f"{row['name']} peer median", "period": "peer median", "status": "calculated",
+         "value": row["peer_median"], "unit": row["unit"]} for row in comparison if row["peer_median"] is not None]
+    if context is not None:
+        context.setdefault("read", {}).update(read)
+        context["results"] = results
+        dates = [d["publication_date"] for d in documents if d.get("publication_date")]
+        context["latest_results_date"] = max(dates) if dates else None
+    request = prompts.build("summarise_reports", {
+        "ticker": company["ticker"], "company": company["name"], "pages": _passages(read, [SUMMARY_QUERY], 3),
+        "indicators": [{k: r[k] for k in ("indicator", "name", "period", "status", "value", "unit")} for r in results]})
+    summary = validation.check_statements(services.model.ask(request["task"], request["data"]).get("statements", []), read, results)
+
+    return {
+        "agent": AGENT,
+        "documents": documents,
+        "summary": summary,
+        "indicators": {"definition_version": analysis["definition_version"], "business_model": analysis["business_model"],
+                       "current_period": analysis["current_period"], "current": [r.to_dict() for r in analysis["current"]],
+                       "history": {fy: [r.to_dict() for r in rs] for fy, rs in analysis["history"].items()}, "notes": analysis["notes"]},
+        "peer_comparison": comparison,
+        "extraction_check": {"accepted": len(check["accepted"]), "rejected": check["rejected"]},
+        "notes": notes,
+    }
