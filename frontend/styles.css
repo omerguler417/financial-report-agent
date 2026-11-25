@@ -75,3 +75,7 @@ label { display: inline-flex; gap: 0.3rem; align-items: center; }
 .issue { font-size: 0.85rem; color: #8a5a00; }
 .warn-list li { color: #8a5a00; }
 .table-wrap { overflow-x: auto; }
+.downloads { margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid #e1e5ea; }
+.button-link { display: inline-block; margin-left: 0.4rem; padding: 0.35rem 0.8rem; border-radius: 4px; background: #2f5d8a; color: #fff;
+  text-decoration: none; }
+.button-link:hover { background: #244a6e; }

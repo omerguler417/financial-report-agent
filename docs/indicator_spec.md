@@ -284,6 +284,8 @@ Recorded 18 November 2026. Documentation only: no code has been changed yet. Eac
 - **Built in two parts.** 5a: run an analysis on the website and read the report. 5b: PDF (default) and Word downloads.
 - **One shared layout (`backend/report_blocks.py`).** The finished report is turned into display blocks in a fixed order: overview, disagreements, key figures (with peer medians and the sources of every figure), key figures by fiscal year, what the reports say, earnings call, news, risks, not verified, missing information, limitations. The website draws these blocks; the PDF and Word files will draw the same ones, so all three match.
 - **Demo mode is a tick box the user chooses for each analysis** (unticked by default). A demo report shows the DEMO label first and last; unverified statements are highlighted with their reasons.
+- **Downloads (step 5b, 25 November 2026).** "Download PDF" and "Download Word" at the end of the report. Both files are drawn from the same display blocks as the website. A demo report carries the DEMO label in the header of every page, and the file name ends in `_DEMO`. PDF uses reportlab 5.1.1; Word uses python-docx 1.2.0. The PDF's built-in fonts cover Western European text; a few signs (−, →, ≤, ≥) are swapped for plain equivalents.
+- **Libraries pinned.** pypdf 7.0.1, python-docx 1.2.0 and openpyxl 3.1.5 (used since step 2) and reportlab 5.1.1 are now pinned in `requirements.txt`; the step 2 libraries had been installed locally but never pinned. A fresh install from `requirements.txt` passes all tests.
 
 ## Unresolved definitions and assumptions
 
@@ -358,7 +360,7 @@ These are not part of the original brief and are added here for review.
 | Analysis pipeline, step 4a: company identification, peer choice, Agent 1 (reports read into pages, figures extracted and checked, indicators, checked summary), background progress, `POST /api/analyses`, `GET /api/analyses/{id}`, `GET /api/analyses/{id}/report` | Working and tested in demo mode (22 November 2026); live mode returns the list of services still needed (HTTP 424); not yet on the website |
 | Agents 2 and 3, step 4b: earnings call (management, guidance and analysts kept apart), news review with source details, combined report with disagreements, risks, missing information, unverified statements and limitations; wording checks | Working and tested in demo mode (22 November 2026); not yet on the website |
 | Website, step 5a: "Run an analysis" box (company, demo tick box, progress, choice when several companies match, list of missing services for a live run) and the report view; `GET /api/analyses/{id}/view` | Working; the layout is tested, the page itself is not yet checked in a browser (22 November 2026) |
-| PDF and Word download (step 5b) | Awaiting implementation |
+| PDF (default) and Word download, step 5b: `GET /api/analyses/{id}/download/pdf` and `/docx`, DEMO label on every page | Working and tested (25 November 2026) |
 
 ### Still open
 
@@ -373,7 +375,7 @@ These are not part of the original brief and are added here for review.
 ### Code changes needed to implement v1.0 (not done yet)
 
 - Done 18 November 2026: provider-neutral settings in `backend/config.py`, `backend/llm.py`, `backend/fetchers/market_data.py`, `.env.example` (placeholders appended; the old `OPENAI_API_KEY` line must be deleted by hand because the deny rule blocks reading the file), `CLAUDE.md`; EDGAR identification setting; setup messages via `backend/services.py`.
-- `backend/report_export.py` (step 5b): still a placeholder. The remaining v1.0 indicators come after the core set.
+- Steps 1–5 of the demo plan are done. The remaining v1.0 indicators come after the core set.
 - `backend/peer_selection.py`: add the v1.0 criteria order, the separate group for weak user-selected peers, and peer-median rules.
 - `backend/fetchers/`: IR discovery, EDGAR (CIK, 6-K inspection, identification header), amended-filing precedence, wider news relevance.
 - `backend/storage.py`: add the provenance fields (consolidation scope, accounting framework, restatement status, definition version, analysis date).

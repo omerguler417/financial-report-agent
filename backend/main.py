@@ -7,7 +7,7 @@ from pathlib import Path
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -15,7 +15,8 @@ from pydantic import BaseModel
 # Values are never printed or logged.
 load_dotenv()
 
-from backend import language, llm, peer_selection, pipeline, report_blocks, report_reader, services, storage, transcription  # noqa: E402
+from backend import (language, llm, peer_selection, pipeline, report_blocks, report_export, report_reader, services,  # noqa: E402
+                     storage, transcription)
 from backend.config import Settings, get_settings  # noqa: E402
 from backend.errors import ProviderNotConfigured, ServicesNotReady  # noqa: E402
 from backend.fetchers import market_data  # noqa: E402
@@ -38,12 +39,13 @@ FEATURES = {
         "Reading PDF, Word, Excel, HTML and text documents with page, section or sheet numbers, and finding the relevant pages (step 2)",
         "Core indicator calculations with sources, history and peer medians (step 3; v1.0 core set plus ROIC)",
         "Demo analysis on the website: company, peers, Agents 1, 2 and 3 with every statement checked, shown as a report (steps 4 and 5a)",
+        "Report download as PDF (default) or Word, with the DEMO label on every page of a demo report (step 5b)",
     ],
     "awaiting_implementation": [
         "Provider adapters for the services you choose later (text model, speech-to-text, market data, news)",
         "Finding reports on investor relations sites and regulator fallbacks",
         "Gathering peer candidates automatically",
-        "PDF and Word download of the report (step 5b), and the remaining v1.0 indicators",
+        "The remaining v1.0 indicators",
     ],
 }
 
@@ -239,6 +241,23 @@ def create_app(settings: Settings | None = None, provider_factory=None, run=None
             return report_blocks.build(analyses.result(job_id))
         except KeyError:
             raise HTTPException(404, "No report yet.")
+
+    DOWNLOADS = {"pdf": ("application/pdf", report_export.to_pdf),
+                 "docx": ("application/vnd.openxmlformats-officedocument.wordprocessingml.document", report_export.to_docx)}
+
+    @app.get("/api/analyses/{job_id}/download/{kind}")
+    def analysis_download(job_id: str, kind: str):
+        """The report as a PDF (default) or an editable Word file, with the same content as the website."""
+        if kind not in DOWNLOADS:
+            raise HTTPException(404, "Downloads are available as pdf or docx.")
+        try:
+            report = analyses.result(job_id)
+        except KeyError:
+            raise HTTPException(404, "No report yet.")
+        media_type, export = DOWNLOADS[kind]
+        name = f"{report['company']['ticker']}_analysis_{report['analysis_date']}{'_DEMO' if report.get('demo_label') else ''}.{kind}"
+        return Response(export(report_blocks.build(report)), media_type=media_type,
+                        headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
     # ---- saved reports and maintenance ----
 

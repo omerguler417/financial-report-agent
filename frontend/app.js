@@ -331,6 +331,14 @@ async function showReport(id) {
   const box = $("report");
   box.replaceChildren(...view.blocks.map(renderBlock));
   if (view.demo_label) box.appendChild(el("div", view.demo_label, "banner"));  // the label at the end as well as the top
+  const downloads = el("div", null, "downloads");
+  downloads.appendChild(el("span", "Download the full report: "));
+  for (const [kind, label] of [["pdf", "Download PDF"], ["docx", "Download Word"]]) {
+    const link = el("a", label, "button-link");
+    link.href = `/api/analyses/${id}/download/${kind}`;
+    downloads.appendChild(link);
+  }
+  box.appendChild(downloads);
   $("report-section").hidden = false;
   $("report-section").scrollIntoView({ behavior: "smooth" });
 }
