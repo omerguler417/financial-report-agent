@@ -287,6 +287,15 @@ Recorded 18 November 2026. Documentation only: no code has been changed yet. Eac
 - **Downloads (step 5b, 25 November 2026).** "Download PDF" and "Download Word" at the end of the report. Both files are drawn from the same display blocks as the website. A demo report carries the DEMO label in the header of every page, and the file name ends in `_DEMO`. PDF uses reportlab 5.1.1; Word uses python-docx 1.2.0. The PDF's built-in fonts cover Western European text; a few signs (−, →, ≤, ≥) are swapped for plain equivalents.
 - **Libraries pinned.** pypdf 7.0.1, python-docx 1.2.0 and openpyxl 3.1.5 (used since step 2) and reportlab 5.1.1 are now pinned in `requirements.txt`; the step 2 libraries had been installed locally but never pinned. A fresh install from `requirements.txt` passes all tests.
 
+### Decisions for the folio. website design (25 November 2026, branch `v3-frontend`)
+
+- **New look, same functions.** The website follows the folio. v3 description: navy sidebar with six pages (New analysis, Agent workflow, Analysis dashboard, Sources & transcripts, My reports, Services & setup), white cards, green accent, blue for Agent 1, green for Agent 2, purple for Agent 3. Built on the existing endpoints; no backend behaviour changed.
+- **Fields the backend does not use yet** (horizon, choosing indicators, extra questions) are shown disabled and labelled "Coming later". Uploads in the form work but are labelled as not yet used in the analysis.
+- **My reports** remembers analyses in the user's browser only; a list kept on the server would need a new endpoint (open).
+- **Live is the default data choice**; demo is the user's explicit choice for the whole analysis.
+- **No figures are calculated in the browser.** Cards and tables show the values Python formatted (`/view`); the chart plots Python's values and only works out drawing positions. Before an analysis has run, pages show empty states, never sample figures. Nothing is loaded from outside the project (system fonts; Inter only if installed).
+- **FFmpeg setup text** now says it is only needed for uploaded recordings and gives the Mac and Windows install commands, instead of "add to .env".
+
 ## Unresolved definitions and assumptions
 
 These choices were open. Most are now resolved by `indicator_definitions.md` v1.0 (marked [x]); the rest remain open and must not be resolved silently in code.
@@ -360,6 +369,7 @@ These are not part of the original brief and are added here for review.
 | Analysis pipeline, step 4a: company identification, peer choice, Agent 1 (reports read into pages, figures extracted and checked, indicators, checked summary), background progress, `POST /api/analyses`, `GET /api/analyses/{id}`, `GET /api/analyses/{id}/report` | Working and tested in demo mode (22 November 2026); live mode returns the list of services still needed (HTTP 424); not yet on the website |
 | Agents 2 and 3, step 4b: earnings call (management, guidance and analysts kept apart), news review with source details, combined report with disagreements, risks, missing information, unverified statements and limitations; wording checks | Working and tested in demo mode (22 November 2026); not yet on the website |
 | Website, step 5a: "Run an analysis" box (company, demo tick box, progress, choice when several companies match, list of missing services for a live run) and the report view; `GET /api/analyses/{id}/view` | Working; the layout is tested, the page itself is not yet checked in a browser (22 November 2026) |
+| folio. website design (branch `v3-frontend`): six pages, workflow progress per agent, dashboard tabs, SVG chart, sources with details, printable report with cover, mobile menu | Built; tested by page tests and by running the page script against a demo analysis outside a browser; not yet checked in a browser (25 November 2026) |
 | PDF (default) and Word download, step 5b: `GET /api/analyses/{id}/download/pdf` and `/docx`, DEMO label on every page | Working and tested (25 November 2026) |
 
 ### Still open

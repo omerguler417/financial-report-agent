@@ -3,102 +3,258 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Financial Report Analysis Agent</title>
+  <title>folio. – Financial Report Analysis Agent</title>
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
-  <main>
-    <h1>Financial Report Analysis Agent</h1>
+<div class="app">
+  <aside class="sidebar" id="sidebar">
+    <a class="logo" href="#new">folio<span>.</span></a>
+    <p class="logo-sub">Financial Report Analysis Agent</p>
+    <nav aria-label="Main">
+      <a href="#new"><span class="nav-icon">＋</span>New analysis</a>
+      <a href="#workflow"><span class="nav-icon">⇢</span>Agent workflow</a>
+      <a href="#dashboard"><span class="nav-icon">▦</span>Analysis dashboard</a>
+      <a href="#sources"><span class="nav-icon">❝</span>Sources &amp; transcripts</a>
+      <a href="#reports"><span class="nav-icon">▤</span>My reports</a>
+      <a href="#services"><span class="nav-icon">⚙</span>Services &amp; setup</a>
+    </nav>
+    <div class="sidebar-note">
+      <strong>Three agents. One evidence-led report.</strong>
+      <p>Agent 1 reads the reports and calculates the indicators. Agent 2 reviews the earnings call and the news. Agent 3 combines both, with a source for every statement.</p>
+    </div>
+  </aside>
+  <div class="scrim" id="scrim"></div>
 
-    <p class="notice" role="status">
-      The full company analysis runs in demo mode, on fictional sample data. Live analyses need the data providers,
-      which are added at the API stage; until then a live run lists the services it still needs.
-    </p>
+  <div class="main">
+    <header class="topbar">
+      <button class="menu-button" id="menu-button" type="button" aria-label="Open the menu">☰</button>
+      <nav class="breadcrumb" id="breadcrumb" aria-label="Breadcrumb">folio</nav>
+      <a class="btn btn-green" href="#new">＋ New analysis</a>
+    </header>
+    <div class="demo-banner" id="demo-banner" role="status" hidden></div>
 
-    <section>
-      <h2>Run an analysis</h2>
-      <form id="analysis-form">
-        <input type="text" id="company" placeholder="Company name or ticker, e.g. Northgate" required>
-        <label><input type="checkbox" id="demo-mode"> Demo mode (fictional data)</label>
-        <button type="submit">Run analysis</button>
-      </form>
-      <p class="hint">Demo companies: Northgate (NRTH.DEMO), Ridgeway (RDGE.DEMO), Saltlake (SLTK.DEMO), Carbonfield (CRBN.DEMO),
-        Lakeshore Bank (LKSB.DEMO).</p>
-      <div id="analysis-status" role="status"></div>
-    </section>
+    <main class="content">
+      <!-- 01 New analysis -->
+      <section class="page" id="page-new">
+        <div class="page-head">
+          <span class="eyebrow">01 / Setup</span>
+          <h1>New analysis</h1>
+          <p>Name one company. Agent 1 reads its reports and calculates the indicators in Python, Agent 2 reviews its earnings call and the news, and Agent 3 combines both into one sourced report.</p>
+        </div>
+        <div class="two-col">
+          <div class="card">
+            <form id="analysis-form" novalidate>
+              <label class="field">
+                <span class="label">Company</span>
+                <input type="text" id="company" placeholder="Company name or ticker, e.g. Northgate" required autocomplete="off">
+              </label>
+              <div class="field-row">
+                <label class="field">
+                  <span class="label">Horizon <em class="soon">Coming later</em></span>
+                  <select id="horizon" disabled><option>Five fiscal years and the latest twelve months</option></select>
+                </label>
+                <label class="field">
+                  <span class="label">Output language</span>
+                  <select id="language"></select>
+                </label>
+              </div>
+              <fieldset class="field">
+                <legend class="label">Indicators <em class="soon">Coming later</em></legend>
+                <div class="checks">
+                  <label class="check"><input type="checkbox" name="indicator-group" checked disabled> Valuation</label>
+                  <label class="check"><input type="checkbox" name="indicator-group" checked disabled> Debt and liquidity</label>
+                  <label class="check"><input type="checkbox" name="indicator-group" checked disabled> Profitability</label>
+                  <label class="check"><input type="checkbox" name="indicator-group" checked disabled> Growth and cash</label>
+                  <label class="check"><input type="checkbox" name="indicator-group" checked disabled> Per share</label>
+                </div>
+                <p class="hint">Every analysis calculates all core indicators of definitions v1.0; choosing them comes later.</p>
+              </fieldset>
+              <label class="field">
+                <span class="label">Peers <em class="optional">optional</em></span>
+                <input type="text" id="peers" placeholder="Tickers separated by commas; otherwise three to five are chosen for you" autocomplete="off">
+              </label>
+              <label class="field">
+                <span class="label">Extra questions <em class="soon">Coming later</em></span>
+                <textarea id="extra-questions" rows="2" disabled placeholder="For example: how exposed is the company to new regulation?"></textarea>
+              </label>
+              <div class="field">
+                <span class="label">Your own files <em class="optional">optional</em></span>
+                <div class="drop-zone" id="drop-zone" tabindex="0" role="button" aria-label="Upload a report or recording">
+                  <strong>Drop a report or recording here</strong>
+                  <span>or click to choose a file</span>
+                  <input type="file" id="file-input" hidden>
+                </div>
+                <progress id="upload-progress" max="100" value="0" hidden></progress>
+                <p class="hint" id="upload-limits">Uploads are kept with your files under Services &amp; setup and labelled as uploads. They are not yet used in the analysis.</p>
+                <p class="message" id="upload-message" role="status"></p>
+              </div>
+              <fieldset class="field">
+                <legend class="label">Data</legend>
+                <div class="segmented">
+                  <label><input type="radio" name="mode" value="live" checked><span>Live data</span></label>
+                  <label><input type="radio" name="mode" value="demo"><span>Demo (fictional data)</span></label>
+                </div>
+                <p class="hint">Live analyses need the data providers, which are added at the API stage; until then a live run lists the services it still needs. Demo companies: Northgate (NRTH.DEMO), Ridgeway (RDGE.DEMO), Saltlake (SLTK.DEMO), Carbonfield (CRBN.DEMO), Lakeshore Bank (LKSB.DEMO).</p>
+              </fieldset>
+              <button class="btn btn-green btn-block" type="submit">Run analysis</button>
+              <div id="analysis-status" class="analysis-status" role="status"></div>
+            </form>
+          </div>
 
-    <section id="report-section" hidden>
-      <div id="report"></div>
-    </section>
+          <div class="stack">
+            <div class="card">
+              <span class="eyebrow">02 / Workflow</span>
+              <h2>How the three agents work</h2>
+              <div class="flow">
+                <div class="flow-node">Sources<small>Company reports, earnings call, news</small></div>
+                <div class="flow-arrow">↓</div>
+                <div class="flow-pair">
+                  <div class="flow-node agent-1">Agent 1 · Financial analyst<small>Reads the reports, calculates the indicators in Python, compares with history and peers</small></div>
+                  <div class="flow-node agent-2">Agent 2 · Meeting &amp; news analyst<small>Earnings call: management, guidance and analysts kept apart; relevant news</small></div>
+                </div>
+                <div class="flow-arrow">↓</div>
+                <div class="flow-node agent-3">Agent 3 · Report combiner<small>One report: overview, disagreements, risks, what is missing</small></div>
+                <div class="flow-arrow">↓</div>
+                <div class="flow-node">Sourced report<small>On screen, as PDF or as Word</small></div>
+              </div>
+            </div>
+            <div class="card">
+              <span class="eyebrow">03 / Sources</span>
+              <h2>Source summary</h2>
+              <div id="source-summary"><p class="empty">Appears after an analysis has run.</p></div>
+            </div>
+          </div>
+        </div>
+      </section>
 
-    <section>
-      <h2>Output language</h2>
-      <label for="language">Answers and translations are given in</label>
-      <select id="language"></select>
-      <p class="hint">Source documents and recordings can be in any supported language; originals are kept beside translations.</p>
-    </section>
+      <!-- 02 Agent workflow -->
+      <section class="page" id="page-workflow" hidden>
+        <div class="page-head">
+          <span class="eyebrow">02 / Workflow</span>
+          <h1>Agent workflow</h1>
+          <p>Each step of the current analysis. The agents run one after another; Agent 2 starts when Agent 1 has finished.</p>
+        </div>
+        <div class="dark-banner" id="workflow-banner"><p>No analysis is running. Start one under New analysis.</p></div>
+        <div id="workflow-steps" class="steps"></div>
+      </section>
 
-    <section>
-      <h2>Upload documents or recordings</h2>
-      <p class="hint">Add material the agents cannot reach, or supplement what they retrieve. Uploads are labelled separately
-        from official sources. Limits: <span id="limit-mb">500</span> MB per file, <span id="limit-hours">4</span> hours per recording.</p>
-      <form id="upload-form">
-        <input type="file" id="file" name="file" required>
-        <input type="text" id="period" name="reporting_period" placeholder="Reporting period (optional), e.g. Q3 2026">
-        <input type="text" id="notes" name="notes" placeholder="Notes (optional)">
-        <button type="submit">Upload</button>
-      </form>
-      <progress id="upload-progress" max="100" value="0" hidden></progress>
-      <p id="upload-message" class="message" role="status"></p>
-      <ul id="files" class="items"></ul>
-    </section>
+      <!-- 03 Analysis dashboard -->
+      <section class="page" id="page-dashboard" hidden>
+        <div class="page-head">
+          <span class="eyebrow">03 / Dashboard</span>
+          <h1 id="dash-title">Analysis dashboard</h1>
+          <p id="dash-sub">The results of the current analysis.</p>
+        </div>
+        <div class="card empty-card" id="dash-empty">Run an analysis to see this.</div>
+        <div id="dash-body" hidden>
+          <div class="metrics" id="metrics"></div>
+          <div class="tabs" role="tablist">
+            <button type="button" role="tab" data-tab="overview" class="active">Overview</button>
+            <button type="button" role="tab" data-tab="financials">Financials &amp; peers</button>
+            <button type="button" role="tab" data-tab="meetings">Meetings &amp; news</button>
+            <button type="button" role="tab" data-tab="assessment">Integrated assessment</button>
+            <button type="button" role="tab" data-tab="report">Final report</button>
+          </div>
+          <div class="tab-panel" id="tab-overview"></div>
+          <div class="tab-panel" id="tab-financials" hidden></div>
+          <div class="tab-panel" id="tab-meetings" hidden></div>
+          <div class="tab-panel" id="tab-assessment" hidden></div>
+          <div class="tab-panel" id="tab-report" hidden></div>
+        </div>
+      </section>
 
-    <section>
-      <h2>Transcription jobs</h2>
-      <p id="model-status" class="hint"></p>
-      <ul id="jobs" class="items"></ul>
-      <div id="transcript"></div>
-    </section>
+      <!-- 04 Sources & transcripts -->
+      <section class="page" id="page-sources" hidden>
+        <div class="page-head">
+          <span class="eyebrow">04 / Evidence</span>
+          <h1>Sources &amp; transcripts</h1>
+          <p>Every document page, calculated result, news item and price the current analysis relies on.</p>
+        </div>
+        <div class="card empty-card" id="sources-empty">Run an analysis to see its sources.</div>
+        <div id="sources-body" hidden>
+          <div class="toolbar">
+            <input type="search" id="source-search" placeholder="Search sources" aria-label="Search sources">
+            <div class="chips" id="source-chips"></div>
+          </div>
+          <div class="source-grid" id="source-grid"></div>
+        </div>
+        <div class="card">
+          <span class="eyebrow">Transcripts</span>
+          <h2>Original and translation</h2>
+          <div class="transcript-picker" id="transcript-picker"><p class="empty">No transcript yet. Run an analysis, or transcribe an uploaded recording under Services &amp; setup.</p></div>
+          <div id="transcript-view"></div>
+        </div>
+      </section>
 
-    <section>
-      <h2>Share price check</h2>
-      <form id="price-form">
-        <input type="text" id="ticker" placeholder="Ticker, e.g. AAPL" required>
-        <input type="date" id="price-date" title="Leave empty for the latest completed trading session">
-        <button type="submit">Check price</button>
-      </form>
-      <p id="price-result" class="message" role="status"></p>
-    </section>
+      <!-- 05 My reports -->
+      <section class="page" id="page-reports" hidden>
+        <div class="page-head">
+          <span class="eyebrow">05 / Reports</span>
+          <h1>My reports</h1>
+          <p>Analyses you have run, remembered by this browser only, and reports saved on the server.</p>
+        </div>
+        <div class="card">
+          <h2>Analyses in this browser</h2>
+          <ul class="items" id="my-analyses"></ul>
+        </div>
+        <div class="card">
+          <h2>Saved reports</h2>
+          <ul class="items" id="reports"></ul>
+        </div>
+      </section>
 
-    <section>
-      <h2>Saved reports</h2>
-      <ul id="reports" class="items"></ul>
-    </section>
+      <!-- 06 Services & setup -->
+      <section class="page" id="page-services" hidden>
+        <div class="page-head">
+          <span class="eyebrow">06 / Setup</span>
+          <h1>Services &amp; setup</h1>
+          <p>Which outside services are set up, your uploaded files, transcription jobs and what the tool can do so far.</p>
+        </div>
+        <div class="card">
+          <h2>Services</h2>
+          <p class="hint">Providers are chosen at the API stage. Until then each service shows what it needs; nothing falls back to demo data.</p>
+          <div class="service-grid" id="services"></div>
+        </div>
+        <div class="two-col">
+          <div class="card">
+            <h2>Your files</h2>
+            <ul class="items" id="files"></ul>
+          </div>
+          <div class="card">
+            <h2>Transcription jobs</h2>
+            <p class="hint" id="model-status"></p>
+            <ul class="items" id="jobs"></ul>
+          </div>
+        </div>
+        <div class="card">
+          <h2>Share price check</h2>
+          <form id="price-form" class="inline-form">
+            <input type="text" id="ticker" placeholder="Ticker, e.g. AAPL" required>
+            <input type="date" id="price-date" title="Leave empty for the latest completed trading session">
+            <button class="btn" type="submit">Check price</button>
+          </form>
+          <p class="message" id="price-result" role="status"></p>
+        </div>
+        <div class="card">
+          <h2>Feature status</h2>
+          <div class="status-grid">
+            <div><h3>Working</h3><ul id="working"></ul></div>
+            <div><h3>Awaiting implementation</h3><ul id="awaiting"></ul></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
 
-    <section>
-      <h2>Planned tool</h2>
-      <p>
-        You will name a company (with its ticker and exchange), choose the indicators and your output language, and
-        optionally a timeframe (five years by default). The agents fetch the reports and earnings-call material
-        themselves, starting with the company's investor relations website; anything missing can be uploaded above.
-        The focus is companies listed on the New York Stock Exchange.
-      </p>
-      <ul>
-        <li><strong>Agent 1, financial analyst:</strong> summarises the written reports with precise references,
-          calculates your indicators in Python, and compares valuation with the company's own history and with three to
-          five suitable peers, each one explained.</li>
-        <li><strong>Agent 2, earnings call and news analyst:</strong> analyses the earnings call including Q&amp;A, from the
-          official transcript or by transcribing the recording, and reports news published since the latest quarterly report.</li>
-        <li><strong>Agent 3, report combiner:</strong> merges both into one report you read here and download as PDF or Word.</li>
-      </ul>
-      <h3>Feature status</h3>
-      <div class="status-grid">
-        <div><h4>Working</h4><ul id="working"></ul></div>
-        <div><h4>Awaiting implementation</h4><ul id="awaiting"></ul></div>
-        <div><h4>Services (providers are chosen later)</h4><ul id="services"></ul></div>
-      </div>
-    </section>
-  </main>
-  <script src="/static/app.js"></script>
+<div class="modal" id="modal" hidden>
+  <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <button class="modal-close" id="modal-close" type="button" aria-label="Close">×</button>
+    <h2 id="modal-title"></h2>
+    <div id="modal-body"></div>
+  </div>
+</div>
+<script src="/static/app.js"></script>
 </body>
 </html>

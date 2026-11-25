@@ -40,11 +40,14 @@ FEATURES = {
         "Core indicator calculations with sources, history and peer medians (step 3; v1.0 core set plus ROIC)",
         "Demo analysis on the website: company, peers, Agents 1, 2 and 3 with every statement checked, shown as a report (steps 4 and 5a)",
         "Report download as PDF (default) or Word, with the DEMO label on every page of a demo report (step 5b)",
+        "folio. website design: sidebar pages for a new analysis, agent workflow, dashboard with five tabs and a chart, sources and transcripts, my reports (in this browser) and services",
     ],
     "awaiting_implementation": [
         "Provider adapters for the services you choose later (text model, speech-to-text, market data, news)",
         "Finding reports on investor relations sites and regulator fallbacks",
         "Gathering peer candidates automatically",
+        "Choosing the horizon and indicators, and extra questions, in the New analysis form (shown as coming later)",
+        "Using uploaded files in the analysis; a list of past analyses kept on the server",
         "The remaining v1.0 indicators",
     ],
 }
