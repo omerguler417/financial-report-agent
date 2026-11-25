@@ -169,6 +169,8 @@ def test_the_model_gets_formatted_values_with_their_signs_never_raw_numbers(tmp_
         values = [i["value"] for t, d in asked if t == task for i in d["indicators"]]
         assert values and all(isinstance(v, str) for v in values), task
         assert "9.73x" in values and any(v.endswith("%") for v in values), task
+        cites = [i["cite_as"] for t, d in asked if t == task for i in d["indicators"]]
+        assert all(set(c) == {"indicator", "period"} for c in cites), task  # the exact citation to copy
 
 
 def test_every_task_says_to_quote_numbers_as_given_and_keep_document_ids_out_of_the_text():
@@ -190,6 +192,18 @@ def test_a_badly_shaped_model_answer_is_labelled_unverified_never_a_crash(tmp_pa
     a3 = agent3.run({**COMPANY, "exchange": "NYSE"}, a1, a2, services, context)
     assert a3["overview"][0]["text"] == "Revenue grew." and not a3["overview"][0]["verified"]
     assert "No source cited" in a3["overview"][0]["issues"][0]
-    assert [d["topic"] for d in a3["disagreements"]] == ["Capex is disputed.", "Margins"]
+    assert [d["topic"] for d in a3["disagreements"]] == ["Margins"]
     assert all(not p["verified"] for d in a3["disagreements"] for p in d["positions"])
     assert a3["risks"][0]["text"] == "Competition." and not a3["risks"][0]["verified"]
+
+
+def test_a_disagreement_without_positions_is_not_shown(tmp_path):
+    services, context = demo_services(), {}
+    a1 = agent1.run(COMPANY, {"peers": [], "excluded": [], "notes": []}, services, ON, context)
+    a2 = agent2.run(COMPANY, services, ON, context)
+
+    class NothingToCompare:
+        def ask(self, task, data):
+            return {"overview": [], "risks": [], "disagreements": ["There are no explicit disagreements in the data."]}
+    services.model = NothingToCompare()
+    assert agent3.run({**COMPANY, "exchange": "NYSE"}, a1, a2, services, context)["disagreements"] == []

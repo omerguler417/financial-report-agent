@@ -28,7 +28,7 @@ TASKS = {
         "instructions": (
             "Summarise the company's business, results, outlook and risks from the report pages in the data, in short factual statements. "
             "Cite each statement with the document id and page it comes from. To mention a calculated indicator, quote its value from the "
-            "indicator list in the data exactly as given (for example 18.80% or 1.22x) and cite it as {\"indicator\": id, \"period\": period}."
+            "indicator list in the data exactly as given (for example 18.80% or 1.22x) and copy its cite_as object as the citation."
         ),
         "answer_format": {"statements": [{"text": "", "citations": [{"doc_id": "", "page": 0}]}]},
     },
@@ -59,7 +59,9 @@ TASKS = {
             "Combine the findings of Agent 1 (reports and calculated indicators) and Agent 2 (earnings call and news) into an overview, "
             "the points where they disagree or where an assumption conflicts with what management or the reports say, and the main risks. "
             "Use only statements and numbers given in the data, cite each one exactly as it was cited there, and say who said each "
-            "position in a disagreement. Do not calculate anything new."
+            "position in a disagreement. To mention a calculated indicator, quote its value exactly as given and copy its cite_as object "
+            "as the citation; never invent a source name. If nothing in the data conflicts, return no disagreements. Do not calculate "
+            "anything new."
         ),
         "answer_format": {"overview": [{"text": "", "citations": []}],
                           "disagreements": [{"topic": "", "positions": [{"who": "", "text": "", "citations": []}]}],

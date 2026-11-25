@@ -115,3 +115,25 @@ def test_document_references_in_the_text_are_removed_not_mistaken_for_figures():
     assert s["verified"], s["issues"]
     assert s["text"] == "Microsoft Cloud revenue increased 27% to $214.4 billion."
     assert V.numbers_in("Filing 0001193125-26-323660 shows 27%.") == [("27%", 27.0, 0, True)]
+
+
+def test_a_calculated_result_can_be_cited_by_its_name_or_without_its_period():
+    results = [{"indicator": "net_margin", "name": "Net profit margin", "period": "TTM to Q1 2027", "value": 0.411698, "unit": "fraction"},
+               {"indicator": "net_margin", "name": "Net profit margin", "period": "FY2025", "value": 0.36, "unit": "fraction"},
+               {"indicator": "pe", "name": "P/E", "period": "TTM to Q1 2027", "value": 25.8312, "unit": "x"}]
+    by_name, no_period, wrong = V.check_statements([
+        statement("The net profit margin was 41.17%.", {"indicator": "Net profit margin", "period": "TTM to Q1 2027"}),
+        statement("P/E was 25.83x.", {"indicator": "pe"}),  # no period: the current one is used
+        statement("P/E was 30.00x.", {"indicator": "P/E"})], READ, results, current_period="TTM to Q1 2027")
+    assert by_name["verified"] and no_period["verified"], (by_name["issues"], no_period["issues"])
+    assert not wrong["verified"]  # the number must still match
+
+
+def test_negative_numbers_keep_their_sign():
+    assert V.numbers_in("P/E against its historical median of -29.76%, dated 2026-11-24.") == [("-29.76%", -29.76, 2, True)]
+    results = [{"indicator": "pe_vs_hist", "name": "P/E against its historical median", "period": "TTM to Q1 2027", "value": -0.297612,
+                "unit": "fraction"}]
+    ok, wrong_sign = V.check_statements([statement("P/E is -29.76% against its historical median.", {"indicator": "pe_vs_hist"}),
+                                         statement("P/E is 29.76% against its historical median.", {"indicator": "pe_vs_hist"})],
+                                        READ, results, current_period="TTM to Q1 2027")
+    assert ok["verified"] and not wrong_sign["verified"]

@@ -6,7 +6,7 @@ import re
 
 from backend.financials import FIELDS
 
-NUMBER = re.compile(r"(?<![\w.,])(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?(\s?%)?")
+NUMBER = re.compile(r"(?<![\w.,])([-−])?(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?(\s?%)?")  # a minus sign right before a number belongs to it
 VERDICT = re.compile(r"\b(under-?valued|over-?valued|cheap|expensive|bargain|should (?:buy|sell)|(?:buy|sell|hold) (?:rating|recommendation|signal)"
                      r"|(?:is|are|looks?) a (?:buy|sell))\b", re.I)
 PRICE_MOVE = re.compile(r"\b(?:shares?|stock|share price)\b[^.]{0,40}?\b(?:fell|rose|dropped|jumped|slumped|surged|declined|climbed|tumbled|soared|rallied)\b"
@@ -24,15 +24,16 @@ def wording_issues(text: str) -> list[str]:
 
 
 ACCESSION = re.compile(r"\b\d{10}-\d{2}-\d{6}\b")  # SEC filing numbers are references, never figures
+ISO_DATE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")  # dates such as 2026-11-24 are not figures either
 
 
 def numbers_in(text: str) -> list[tuple]:
     """(as written, value, decimals, is_percent) for each number, skipping years, labels such as Q3 or FY2025, and filing numbers."""
     out = []
-    text = ACCESSION.sub(" ", text)
+    text = ISO_DATE.sub(" ", ACCESSION.sub(" ", text))
     for m in NUMBER.finditer(text):
-        whole, fraction, percent = m.group(1), m.group(2) or "", bool(m.group(3))
-        value = float(whole.replace(",", "") + fraction)
+        sign, whole, fraction, percent = m.group(1), m.group(2), m.group(3) or "", bool(m.group(4))
+        value = float(whole.replace(",", "") + fraction) * (-1 if sign else 1)
         if not fraction and not percent and "," not in whole and 1900 <= value <= 2100:
             continue
         out.append((m.group(0).strip(), value, len(fraction) - 1 if fraction else 0, percent))
@@ -141,9 +142,22 @@ def _strip_references(text: str, read: dict) -> str:
     return re.sub(r"\s+([.,;:])", r"\1", text).strip()
 
 
-def check_statements(statements: list[dict], read: dict, results: list[dict]) -> list[dict]:
-    """results: calculated indicator results as dicts ({indicator, period, value, unit, ...})."""
-    by_key = {(r["indicator"], r["period"]): r for r in results}
+def _find_result(citation: dict, results: list[dict], current_period: str | None) -> dict | None:
+    """A cited calculated result, by its id or its name. Without a period, the current period is used; a wrong period finds nothing."""
+    ref = str(citation.get("indicator", "")).strip().lower()
+    matches = [r for r in results if r["indicator"].lower() == ref or str(r.get("name", "")).strip().lower() == ref]
+    period = citation.get("period")
+    if period:
+        return next((r for r in matches if r["period"] == period), None)
+    current = [r for r in matches if r["period"] == current_period] if current_period else []
+    if current:
+        return current[0]
+    return matches[0] if len(matches) == 1 else None
+
+
+def check_statements(statements: list[dict], read: dict, results: list[dict], current_period: str | None = None) -> list[dict]:
+    """results: calculated indicator results as dicts ({indicator, period, value, unit, ...}); current_period: the analysis's
+    current period, used when a citation of a result gives none."""
     checked = []
     for s in as_statements(statements):
         s = {**s, "text": _strip_references(str(s.get("text", "")), read)}
@@ -153,12 +167,12 @@ def check_statements(statements: list[dict], read: dict, results: list[dict]) ->
                 issues.append(f"A citation was not in the expected form ({str(c)[:40]}).")
                 continue
             if "indicator" in c:
-                result = by_key.get((c["indicator"], c.get("period")))
+                result = _find_result(c, results, current_period)
                 if result is None:
-                    issues.append(f"Cited result {c['indicator']} for {c.get('period')} does not exist.")
+                    issues.append(f"Cited result {c['indicator']} for {c.get('period') or 'the current period'} does not exist.")
                     continue
                 cited_results.append(result)
-                citations.append({"indicator": c["indicator"], "period": c.get("period"), "name": result.get("name")})
+                citations.append({"indicator": result["indicator"], "period": result["period"], "name": result.get("name")})
             else:
                 text, problem = _page_text(read, c.get("doc_id"), c.get("page"))
                 if problem:

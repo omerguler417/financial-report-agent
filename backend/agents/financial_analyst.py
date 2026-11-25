@@ -127,9 +127,11 @@ def run(company: dict, peer_selection: dict, services, as_of: date, context: dic
         context["latest_results_date"] = max(dates) if dates else None
     request = prompts.build("summarise_reports", {
         "ticker": company["ticker"], "company": company["name"], "pages": _passages(read, [SUMMARY_QUERY], 3),
-        "indicators": [{**{k: r[k] for k in ("indicator", "name", "period", "status")}, "value": report_blocks.display(r["value"], r["unit"])}
+        "indicators": [{**{k: r[k] for k in ("indicator", "name", "period", "status")}, "value": report_blocks.display(r["value"], r["unit"]),
+                        "cite_as": {"indicator": r["indicator"], "period": r["period"]}}
                        for r in [x.to_dict() for x in analysis["current"]] + [r for r in results if r["period"] == "peer median"]]})
-    summary = validation.check_statements(services.model.ask(request["task"], request["data"]).get("statements", []), read, results)
+    summary = validation.check_statements(services.model.ask(request["task"], request["data"]).get("statements", []), read, results,
+                                          analysis["current_period"])
 
     return {
         "agent": AGENT,

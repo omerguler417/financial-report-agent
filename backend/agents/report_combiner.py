@@ -20,7 +20,8 @@ def _payload(company: dict, agent1: dict, agent2: dict, results: list[dict]) -> 
     return {
         "ticker": company["ticker"], "company": company["name"],
         "agent1_summary": [{"text": s["text"], "citations": s["citations"]} for s in agent1["summary"] if s["verified"]],
-        "indicators": [{**{k: r.get(k) for k in ("indicator", "name", "period", "status")}, "value": report_blocks.display(r.get("value"), r.get("unit"))}
+        "indicators": [{**{k: r.get(k) for k in ("indicator", "name", "period", "status")}, "value": report_blocks.display(r.get("value"), r.get("unit")),
+                        "cite_as": {"indicator": r.get("indicator"), "period": r.get("period")}}
                        for r in results if r["period"] in (current, "peer median")],
         "call": [{k: s.get(k) for k in ("kind", "speaker", "text", "citations")} for s in agent2["call"]["statements"] if s["verified"]],
         "news": [{k: i.get(k) for k in ("id", "publisher", "published", "title", "channel")} for i in agent2["news"]["included"] if i["verified"]],
@@ -62,7 +63,7 @@ def run(company: dict, agent1: dict, agent2: dict, services, context: dict) -> d
     answer = services.model.ask(request["task"], request["data"])
 
     def check(statements: list[dict]) -> list[dict]:
-        checked = validation.check_statements(statements, read, results)
+        checked = validation.check_statements(statements, read, results, agent1["indicators"]["current_period"])
         for s in checked:
             s["based_on"] = sorted({_origin(c, read) for c in s["citations"]})
         return checked
@@ -73,6 +74,8 @@ def run(company: dict, agent1: dict, agent2: dict, services, context: dict) -> d
         if not isinstance(d, dict):  # a plain sentence: kept as a topic without positions
             d = {"topic": str(d), "positions": []}
         positions = check(d.get("positions"))
+        if not positions:  # a topic with no positions is not a disagreement (for example "there are no disagreements")
+            continue
         entry = {"topic": str(d.get("topic", "")), "positions": positions}
         if len({o for p in positions for o in p["based_on"]}) < 2:
             entry["note"] = "All positions come from the same source, so this is not a disagreement between sources."
