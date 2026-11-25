@@ -3,7 +3,10 @@
 # The model never calculates. Documents published after the analysis date are left out.
 from datetime import date
 
-from backend import financials, indicators, prompts, report_reader, retrieval, validation
+from backend import financials, indicators, prompts, report_blocks, report_reader, retrieval, validation
+from backend.errors import ProviderNotConfigured
+from backend.fetchers.http_client import AccessDenied, FetchFailed
+from backend.fetchers.market_data import PriceUnavailable
 
 AGENT = "Agent 1 – reports and indicators"
 REPORT_KINDS = {"annual_report", "quarterly_report"}
@@ -48,17 +51,39 @@ def _passages(read: dict, queries: list[str], per_query: int) -> list[dict]:
     return [chosen[k] for k in sorted(chosen)]
 
 
-def company_inputs(company: dict, services, as_of: date, demo_label: str | None = None) -> tuple:
-    """Figures for one company, checked and turned into calculation inputs. Returns (inputs, read, documents, check, notes)."""
-    read, documents, notes = read_reports(services.documents.find(company["ticker"]), as_of)
-    request = prompts.build("extract_figures", {"ticker": company["ticker"], "company": company["name"], "fields": financials.FIELDS,
-                                                "pages": _passages(read, EXTRACTION_QUERIES, 2)})
-    answer = services.model.ask(request["task"], request["data"])
-    check = validation.check_figures(answer.get("figures", []), read)
-    price = financials.closing_price(services.market, company["ticker"], as_of, demo=bool(demo_label))
-    points = financials.price_points(services.market, company["ticker"], as_of, demo=bool(demo_label))
+def company_inputs(company: dict, services, as_of: date, demo_label: str | None = None, read_documents: bool = True) -> tuple:
+    """Figures for one company, checked and turned into calculation inputs. Returns (inputs, read, documents, check, notes).
+    With structured figures (EDGAR), a peer's reports are not downloaded: only its figures and price are needed."""
+    structured = getattr(services, "figures", None)
+    if read_documents or not structured:
+        read, documents, notes = read_reports(services.documents.find(company["ticker"]), as_of)
+    else:
+        read, documents, notes = {}, [], []
+    if structured:  # SEC filers: figures from the SEC's XBRL data, no model needed
+        accepted, figure_notes = structured(company["ticker"], as_of)
+        check, notes = {"accepted": accepted, "rejected": []}, notes + figure_notes
+    else:
+        request = prompts.build("extract_figures", {"ticker": company["ticker"], "company": company["name"], "fields": financials.FIELDS,
+                                                    "pages": _passages(read, EXTRACTION_QUERIES, 2)})
+        answer = services.model.ask(request["task"], request["data"])
+        check = validation.check_figures(answer.get("figures", []), read)
+    price, points, price_note = None, {}, ""
+    try:
+        price = financials.closing_price(services.market, company["ticker"], as_of, demo=bool(demo_label))
+        points = financials.price_points(services.market, company["ticker"], as_of, demo=bool(demo_label))
+    except ProviderNotConfigured:
+        price_note = "no market-data provider is configured"
+        notes.append("Share prices are not available: no market-data provider is configured, so price-based indicators and peers "
+                     "are not calculated.")
+    except (PriceUnavailable, FetchFailed, AccessDenied) as exc:  # the provider answered with an error: reported, never guessed
+        price_note = "the market-data provider returned no price"
+        notes.append(f"Share prices are not available: {exc}")
     model = financials.business_model(services.market.profile(company["ticker"]))
     inputs = financials.build_inputs(company["name"], check["accepted"], price, model, demo_label, points)
+    inputs.price_note = price_note
+    if structured:  # 10-K and 10-Q filers report under US GAAP
+        inputs.interest_rule = ("US GAAP classifies interest paid within operating activities (ASC 230), so no interest adjustment is "
+                                "needed.")
     return inputs, read, documents, check, notes
 
 
@@ -86,7 +111,7 @@ def run(company: dict, peer_selection: dict, services, as_of: date, context: dic
     peer_analyses = {}
     for peer in peer_selection.get("peers", []):
         try:
-            peer_inputs = company_inputs({"ticker": peer["ticker"], "name": peer["name"]}, services, as_of, demo_label)[0]
+            peer_inputs = company_inputs({"ticker": peer["ticker"], "name": peer["name"]}, services, as_of, demo_label, read_documents=False)[0]
             peer_analyses[peer["ticker"]] = _keep(indicators.analyse(peer_inputs), chosen)
         except Exception as exc:  # one peer's missing data must not stop the analysis; it is reported instead
             notes.append(f"Peer {peer['ticker']} could not be analysed: {exc}")
@@ -102,7 +127,8 @@ def run(company: dict, peer_selection: dict, services, as_of: date, context: dic
         context["latest_results_date"] = max(dates) if dates else None
     request = prompts.build("summarise_reports", {
         "ticker": company["ticker"], "company": company["name"], "pages": _passages(read, [SUMMARY_QUERY], 3),
-        "indicators": [{k: r[k] for k in ("indicator", "name", "period", "status", "value", "unit")} for r in results]})
+        "indicators": [{**{k: r[k] for k in ("indicator", "name", "period", "status")}, "value": report_blocks.display(r["value"], r["unit"])}
+                       for r in [x.to_dict() for x in analysis["current"]] + [r for r in results if r["period"] == "peer median"]]})
     summary = validation.check_statements(services.model.ask(request["task"], request["data"]).get("statements", []), read, results)
 
     return {

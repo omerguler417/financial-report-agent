@@ -19,6 +19,11 @@ def _number(value, unit) -> str:
     return f"{value:,.2f} {unit}"
 
 
+def display(value, unit) -> str:
+    """How a calculated value is shown everywhere (website, PDF, Word, and to the text model): 18.80%, 1.22x, 17.95 USD per share."""
+    return _number(value, unit)
+
+
 def _link(url):
     return url if isinstance(url, str) and url.startswith(("http://", "https://")) else None
 
@@ -28,6 +33,8 @@ def _cite(c: dict) -> dict:
         return {"text": f"Calculated: {c.get('name') or c['indicator']} ({c.get('period')})", "url": None}
     if c.get("publisher"):
         return {"text": f"{c['publisher']}, {c.get('published', '')}".rstrip(", "), "url": _link(c.get("url"))}
+    if c.get("page") is None and c.get("section"):
+        return {"text": f"{c.get('title') or c.get('doc_id')}, {c['section']} ({c.get('tag', '')})", "url": _link(c.get("url"))}
     return {"text": f"{c.get('title') or c.get('doc_id')}, p. {c.get('page')}", "url": _link(c.get("url"))}
 
 
@@ -38,16 +45,22 @@ def _statement(s: dict, tag: str | None = None) -> dict:
 
 def _input_sources(result: dict) -> str:
     """One line per indicator: the documents and pages (and price) its inputs came from."""
-    pages, others = {}, []
+    pages, sections, others = {}, {}, []
     for item in result.get("inputs", []):
         for s in item.get("sources", []):
-            if "doc_id" in s:
+            if "doc_id" in s and s.get("page") is None and s.get("section"):  # SEC XBRL figures: statement and tag, no page
+                where = f"{s['section']} ({s['tag']})" if s.get("tag") else s["section"]
+                found = sections.setdefault(s.get("title") or s["doc_id"], [])
+                if where not in found:
+                    found.append(where)
+            elif "doc_id" in s:
                 pages.setdefault(s.get("title") or s["doc_id"], set()).add(s.get("page"))
             elif s.get("publisher"):
                 text = f"{s['publisher']}, close {s.get('date')}"
                 if text not in others:
                     others.append(text)
-    parts = [f"{title}, {'pp.' if len(p) > 1 else 'p.'} {', '.join(str(n) for n in sorted(p))}" for title, p in pages.items()] + others
+    parts = [f"{title}, {'pp.' if len(p) > 1 else 'p.'} {', '.join(str(n) for n in sorted(p))}" for title, p in pages.items()]
+    parts += [f"{title}, {'; '.join(where)}" for title, where in sections.items()] + others
     return "; ".join(parts) or "no sources (not calculated)"
 
 

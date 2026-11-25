@@ -1,5 +1,6 @@
 # Transcribes earnings-call recordings in the original language, then translates: FFmpeg chunking with overlap, de-duplicated joins, timestamps on the original timeline, background jobs with progress and resume.
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -184,6 +185,13 @@ def check_figures(segments: list[dict], document_texts: dict[str, str]) -> list[
 
 # ---------- background jobs with progress and resume ----------
 
+def _write_whole(path: Path, text: str) -> None:
+    """Write to a temporary file, then swap it in, so the page never reads a half-written file."""
+    temporary = path.with_name(path.name + f".{threading.get_ident()}.tmp")
+    temporary.write_text(text, encoding="utf-8")
+    os.replace(temporary, path)
+
+
 def _now_iso():
     return datetime.now(timezone.utc).isoformat()
 
@@ -213,7 +221,7 @@ class TranscriptionJobs:
 
     def _save(self, state):
         state["updated_at"] = _now_iso()
-        self._state_path(state["id"]).write_text(json.dumps(state, indent=2), encoding="utf-8")
+        _write_whole(self._state_path(state["id"]), json.dumps(state, indent=2))
 
     def create(self, upload_id: str, output_language: str, check_against: list[str] | None = None) -> dict:
         meta = self.store.get(upload_id)
@@ -359,7 +367,7 @@ class TranscriptionJobs:
                 "segments": segments,
                 "figure_checks": check_figures(segments, document_texts) if document_texts else [],
             }
-            self.result_path(job_id).write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
+            _write_whole(self.result_path(job_id), json.dumps(result, indent=2, ensure_ascii=False))
             state["steps_done"].append("done")
             state.update(status="completed", current_step="completed", progress_percent=100)
             self._save(state)

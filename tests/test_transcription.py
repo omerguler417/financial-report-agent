@@ -96,3 +96,25 @@ def test_missing_ffmpeg_fails_with_install_instructions(tmp_path, monkeypatch):
     rec = store.save_upload(io.BytesIO(b"audio"), "call.mp3", "audio/mpeg")
     state = jobs.start(jobs.create(rec["id"], "en")["id"], background=False)
     assert state["status"] == "failed" and "brew install ffmpeg" in state["error"]
+
+
+def test_job_progress_can_be_read_while_the_job_is_writing_it(tmp_path, monkeypatch):
+    # the page asks for progress while the background job rewrites the progress file; it must never see a half-written file
+    import threading
+    store, jobs, _ = make_jobs(tmp_path, FakeProvider(), monkeypatch)
+    rec = store.save_upload(io.BytesIO(b"audio"), "call.mp3", "audio/mpeg")
+    state = jobs.create(rec["id"], "en")
+    stop = threading.Event()
+
+    def keep_writing():
+        while not stop.is_set():
+            jobs._save(dict(state))
+
+    writer = threading.Thread(target=keep_writing)
+    writer.start()
+    try:
+        for _ in range(2000):
+            assert jobs.get(state["id"])["id"] == state["id"]
+    finally:
+        stop.set()
+        writer.join()

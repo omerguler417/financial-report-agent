@@ -150,3 +150,46 @@ def test_agent3_flags_verdicts_and_gathers_what_is_missing_or_unverified(tmp_pat
     assert any("pretax_income" in m for m in a3["missing_information"])
     assert any(D.DEMO_LABEL in lim for lim in a3["limitations"]) and any("standardised free cash flow" in lim for lim in a3["limitations"])
     assert a3["statement_check"]["unverified"] == 3
+
+
+def test_the_model_gets_formatted_values_with_their_signs_never_raw_numbers(tmp_path):
+    services = demo_services()
+    asked = []
+    original = services.model.ask
+
+    def recording(task, data):
+        asked.append((task, data))
+        return original(task, data)
+    services.model.ask = recording
+    context = {}
+    a1 = agent1.run(COMPANY, choose_peers(D.TARGET, services, make_settings(tmp_path)), services, ON, context)
+    a2 = agent2.run(COMPANY, services, ON, context)
+    agent3.run({**COMPANY, "exchange": "NYSE"}, a1, a2, services, context)
+    for task in ("summarise_reports", "combine_report"):
+        values = [i["value"] for t, d in asked if t == task for i in d["indicators"]]
+        assert values and all(isinstance(v, str) for v in values), task
+        assert "9.73x" in values and any(v.endswith("%") for v in values), task
+
+
+def test_every_task_says_to_quote_numbers_as_given_and_keep_document_ids_out_of_the_text():
+    built = prompts.build("combine_report", {})
+    assert "exactly as written" in built["system"] and "% or x" in built["system"]
+    assert "never write document ids" in built["system"].lower()
+
+
+def test_a_badly_shaped_model_answer_is_labelled_unverified_never_a_crash(tmp_path):
+    services, context = demo_services(), {}
+    a1 = agent1.run(COMPANY, {"peers": [], "excluded": [], "notes": []}, services, ON, context)
+    a2 = agent2.run(COMPANY, services, ON, context)
+
+    class Sloppy:
+        def ask(self, task, data):  # plain sentences where objects with citations were asked for
+            return {"overview": ["Revenue grew."], "disagreements": ["Capex is disputed.", {"topic": "Margins", "positions": ["Up.", 5]}],
+                    "risks": "Competition."}
+    services.model = Sloppy()
+    a3 = agent3.run({**COMPANY, "exchange": "NYSE"}, a1, a2, services, context)
+    assert a3["overview"][0]["text"] == "Revenue grew." and not a3["overview"][0]["verified"]
+    assert "No source cited" in a3["overview"][0]["issues"][0]
+    assert [d["topic"] for d in a3["disagreements"]] == ["Capex is disputed.", "Margins"]
+    assert all(not p["verified"] for d in a3["disagreements"] for p in d["positions"])
+    assert a3["risks"][0]["text"] == "Competition." and not a3["risks"][0]["verified"]

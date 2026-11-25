@@ -2,6 +2,7 @@
 # Working: provider-independent freshness rules and the provider interface. No provider is chosen; until one is configured, price requests return a setup message.
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from backend import services
 from backend.config import Settings
@@ -88,8 +89,56 @@ class PriceProvider:
         raise NotImplementedError
 
 
-# Adapters available in the code, by provider name. Empty until a provider is chosen.
-ADAPTERS: dict[str, type[PriceProvider]] = {}
+class TwelveDataProvider(PriceProvider):
+    """Twelve Data's official REST API with the group's own key (decided 25 November 2026). Its robots.txt disallows all crawlers; the
+    group recorded a narrow exception for this API only (CLAUDE.md; docs/twelvedata_robots_exception.md). Per company, one request
+    for actual closes and one for split-adjusted closes; later prices in the same analysis come from that answer. The key is sent in
+    a header, never in the address."""
+
+    name = "twelve_data"
+    SOURCE = "Twelve Data"
+    YEARS = 6  # enough for 12-month returns and the preceding five fiscal year ends
+
+    def __init__(self, settings: Settings, client: PoliteClient):
+        super().__init__(settings, client)
+        self.base = (settings.market_data_base_url or "https://api.twelvedata.com").rstrip("/")
+        self._cache: dict = {}
+        client.set_min_interval(self.base.split("://", 1)[-1].split("/", 1)[0], settings.market_data_min_interval_seconds)
+
+    def _fetch(self, ticker: str, start: date, end: date, adjust: str) -> dict:
+        response = self.client.get(f"{self.base}/time_series",
+                                   params={"symbol": ticker, "interval": "1day", "start_date": start.isoformat(), "end_date": end.isoformat(),
+                                           "adjust": adjust, "order": "ASC", "outputsize": 5000},
+                                   headers={"Authorization": f"apikey {self.settings.market_data_api_key}"})
+        body = response.json()
+        if body.get("status") == "error":
+            message = str(body.get("message", "")).replace(self.settings.market_data_api_key, "[key]")
+            raise PriceUnavailable(f"Twelve Data could not provide prices for {ticker} (code {body.get('code')}): {message}")
+        return body
+
+    def daily_series(self, ticker: str, start: date, end: date) -> PriceSeries:
+        key = ticker.upper()
+        cached = self._cache.get(key)
+        if cached is None or start < cached[0] or end > cached[1]:
+            first = min(start, end - timedelta(days=366 * self.YEARS))
+            self._cache[key] = (first, end, self._fetch(key, first, end, "none"), self._fetch(key, first, end, "splits"))
+        _, _, actual, adjusted = self._cache[key]
+        meta = actual.get("meta", {})
+        tz_name = meta.get("exchange_timezone") or "America/New_York"
+        tz = ZoneInfo(tz_name)
+        split_adjusted = {v["datetime"][:10]: float(v["close"]) for v in adjusted.get("values", [])}
+        bars = []
+        for v in actual.get("values", []):
+            day = date.fromisoformat(v["datetime"][:10])
+            if start <= day <= end:
+                bars.append(DailyBar(day, float(v["close"]), split_adjusted.get(v["datetime"][:10]),
+                                     datetime(day.year, day.month, day.day, 16, 0, tzinfo=tz), float(v["volume"]) if v.get("volume") else None))
+        bars.sort(key=lambda b: b.day)
+        return PriceSeries(key, meta.get("exchange") or "", meta.get("currency") or "", tz_name, self.SOURCE, bars)
+
+
+# Adapters available in the code, by the MARKET_DATA_PROVIDER name used in .env.
+ADAPTERS: dict[str, type[PriceProvider]] = {"twelve_data": TwelveDataProvider}
 
 
 def get_provider(settings: Settings, client: PoliteClient) -> PriceProvider:

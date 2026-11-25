@@ -58,6 +58,9 @@ def _news_read(items: list[dict]) -> dict:
 
 
 def review_news(company: dict, services, as_of: date, since: str | None, notes: list[str]) -> tuple[dict, dict]:
+    if getattr(services, "news", None) is None:
+        notes.append("News is not available: no news provider is configured.")
+        return {"since": since, "included": [], "excluded": []}, {}
     items = []
     for item in services.news.search(company["name"], company["ticker"]):
         if item["published"] > as_of.isoformat():
@@ -72,7 +75,10 @@ def review_news(company: dict, services, as_of: date, since: str | None, notes: 
                                             "items": [{k: i.get(k) for k in ("id", "publisher", "published", "title", "summary")} for i in items]})
     by_id = {i["id"]: i for i in items}
     included, excluded, seen = [], [], set()
-    for answer in services.model.ask(request["task"], request["data"]).get("items", []):
+    for answer in validation.as_list(services.model.ask(request["task"], request["data"]).get("items")):
+        if not isinstance(answer, dict):
+            notes.append("A news assessment from the model was not in the expected form and was ignored.")
+            continue
         item = by_id.get(answer.get("news_id"))
         if item is None:
             notes.append(f"The model referred to a news item that does not exist ({answer.get('news_id')}); it was ignored.")

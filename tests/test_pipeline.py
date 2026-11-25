@@ -37,21 +37,20 @@ def test_an_exact_ticker_wins_and_unclear_or_unknown_companies_are_asked_about(t
     assert c.post("/api/analyses", json={"company": "Nonexistent Corp", "demo": True}).status_code == 404
 
 
-def test_a_live_analysis_lists_every_missing_service_and_never_uses_demo_data(tmp_path):
+def test_a_live_analysis_lists_every_missing_required_service_and_never_uses_demo_data(tmp_path):
+    # decision c (25 November 2026): only the text model and SEC identification are required; prices and news are optional
     c = client(tmp_path)
     response = c.post("/api/analyses", json={"company": "Northgate"})
     assert response.status_code == 424
     needed = " | ".join(item["service"] for item in response.json()["needs_configuration"])
-    for service in ("Text model", "Market data", "News", "Finding company reports"):
-        assert service in needed
+    assert "Text model" in needed and "SEC EDGAR" in needed
     assert not list((tmp_path / "store").rglob("analysis_*"))  # nothing was started
 
 
-def test_a_text_model_adapter_that_cannot_run_analysis_tasks_is_reported(tmp_path):
+def test_a_configured_text_model_still_needs_the_sec_identification(tmp_path):
     c = client(tmp_path, llm_provider="openai_compatible", llm_api_key="test-key", text_model="test-model", llm_base_url="https://llm.invalid")
     items = c.post("/api/analyses", json={"company": "Northgate"}).json()["needs_configuration"]
-    text_model = next(i for i in items if i["service"].startswith("Text model"))
-    assert "cannot yet run the analysis tasks" in text_model["how_to_configure"]
+    assert [i["service"] for i in items] == ["SEC EDGAR identification"]  # the adapter can now run the analysis tasks
 
 
 def test_unknown_analyses_give_404(tmp_path):

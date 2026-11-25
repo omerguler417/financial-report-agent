@@ -108,6 +108,7 @@ async function loadConfig() {
   select.value = recall("folio.language", null) || S.config.default_output_language;
   select.addEventListener("change", () => remember("folio.language", select.value));
   renderIndicatorPicker(S.config.indicators || []);
+  loadTranscriptChoices();
   $("upload-limits").textContent = `Uploads (up to ${S.config.max_upload_mb} MB per file, ${S.config.max_recording_hours} hours per recording) are kept with your files under Services & setup and labelled as uploads. They are not yet used in the analysis.`;
 }
 
@@ -183,7 +184,8 @@ async function runAnalysis(event, chosenTicker) {
   const response = await fetch("/api/analyses", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ company, demo, peers, indicators: indicators, output_language: $("language").value }),
+    body: JSON.stringify({ company, demo, peers, indicators: indicators, output_language: $("language").value,
+      transcript_upload: $("transcript-upload").value || null }),
   });
   const body = await response.json().catch(() => ({}));
   if (response.status === 409) {  // several companies match: the user chooses
@@ -352,6 +354,7 @@ function renderWorkflow(state) {
 function sourceKey(c) {
   if (c.indicator) return `calc|${c.indicator}|${c.period}`;
   if (c.publisher && c.doc_id) return `news|${c.doc_id}`;
+  if (c.doc_id && c.page == null && c.tag) return `xbrl|${c.doc_id}|${c.tag}`;
   if (c.doc_id) return `doc|${c.doc_id}|${c.page}`;
   if (c.publisher) return `price|${c.publisher}|${c.date}`;
   return null;
@@ -407,6 +410,7 @@ function sourceWhere(s) {
   if (s.type === "calculated") return c.period;
   if (s.type === "news") return `${c.publisher} · ${c.published}`;
   if (s.type === "price") return `${c.exchange ? c.exchange + " · " : ""}close ${c.date}`;
+  if (c.page == null && c.section) return `${c.section} · ${c.tag || ""}`;
   return `p. ${c.page}`;
 }
 
@@ -998,6 +1002,20 @@ function formatBytes(n) {
   return n > 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1e3))} KB`;
 }
 
+async function loadTranscriptChoices() {
+  const files = await api("/api/uploads").catch(() => []);
+  const select = $("transcript-upload");
+  const keep = select.value;
+  select.replaceChildren(el("option", "None", ""));
+  select.firstChild.value = "";
+  for (const f of files.filter((x) => x.kind === "document")) {
+    const option = el("option", f.filename);
+    option.value = f.id;
+    select.appendChild(option);
+  }
+  select.value = keep;
+}
+
 async function loadFiles() {
   const files = await api("/api/uploads").catch(() => []);
   const list = $("files");
@@ -1033,6 +1051,7 @@ function uploadFile(file) {
     const body = JSON.parse(xhr.responseText || "{}");
     $("upload-message").textContent = xhr.status >= 400 ? body.detail || "Upload failed." : ["Uploaded " + body.filename + ".", ...(body.warnings || [])].join(" ");
     $("upload-message").className = `message ${xhr.status >= 400 ? "error" : ""}`;
+    loadTranscriptChoices();
   });
   xhr.addEventListener("error", () => { bar.hidden = true; $("upload-message").textContent = "Upload failed."; });
   xhr.open("POST", "/api/uploads");

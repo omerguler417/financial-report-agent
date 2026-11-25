@@ -45,6 +45,8 @@ class CompanyInputs:
     business_model: str = "operating"  # operating | bank | insurer
     demo_label: str | None = None
     price_points: dict = field(default_factory=dict)  # "end", "1m", "3m", "12m" (split-adjusted) and "year end YYYY-12-31" closes
+    price_note: str = ""  # why there is no price, for example "no market-data provider is configured"
+    interest_rule: str = ""  # set for US GAAP filers: interest paid is classified within operating cash flow
 
 
 @dataclass
@@ -118,6 +120,8 @@ class _View:
         self.annual = annual or []  # [(fiscal year, view)] for multi-year measures
         self.prior_flows = prior_flows or {}  # the previous fiscal year's flows, for year-on-year measures in the history
         self.price_points = price_points or {}
+        self.price_note = ""
+        self.interest_rule = ""
         self.not_comparable: dict = {}  # flows whose parts could not be combined, with the reason
 
     def flow(self, name: str) -> Figure:
@@ -149,6 +153,8 @@ def _cfo_standardised(v: _View) -> Figure:
         terms.append((-1, v.flows["interest_paid_outside_cfo"]))
     elif "interest_paid_in_cfo" in v.flows:
         notes.append("Interest paid is already within operating cash flow.")
+    elif v.interest_rule:
+        notes.append(v.interest_rule)
     else:
         raise _Stop("missing", "where interest paid is classified")
     leases = v.closing.get("lease_liabilities")
@@ -206,7 +212,8 @@ def _net_debt(v: _View, include_leases: bool = True) -> Figure:
 
 def _market_cap(v: _View) -> Figure:
     if v.price is None:
-        raise _Stop("missing", "Missing input: share price. Missing is not treated as zero.")
+        why = f" ({v.price_note})" if v.price_note else ""
+        raise _Stop("missing", f"Missing input: share price{why}. Missing is not treated as zero.")
     shares = v.bal("shares_outstanding")
     currency, scale = v.price.unit.split()[0], shares.unit.split()[0]
     return Figure("market_cap", v.price.value * shares.value, f"{currency} {scale}", f"{v.price.period} × shares at {v.closing_label}",
@@ -433,7 +440,8 @@ def _ev_ebit(v):
 def _dividend_yield(v):
     dps = v.flow("dividends_per_share")
     if v.price is None:
-        raise _Stop("missing", "Missing input: share price. Missing is not treated as zero.", [dps])
+        why = f" ({v.price_note})" if v.price_note else ""
+        raise _Stop("missing", f"Missing input: share price{why}. Missing is not treated as zero.", [dps])
     value = _ratio(dps, v.price, "The share price is not positive.")
     return value, [dps, v.price], ("Dividends per share paid over the period ÷ the share price. Per-share amounts are combined across "
                                    "reports, which holds only if there was no share split in the period. Forward dividends are a separate measure.")
@@ -620,7 +628,8 @@ def _price_return(key, words):
     def fn(v):
         end, begin = v.price_points.get("end"), v.price_points.get(key)
         if end is None or begin is None:
-            raise _Stop("missing", f"A split-adjusted closing price from {words} ago is not available.")
+            why = f" ({v.price_note})" if v.price_note else ""
+            raise _Stop("missing", f"A split-adjusted closing price from {words} ago is not available{why}.")
         _check_units(begin, end)
         if begin.value <= 0:
             raise _Stop("not_meaningful", "The starting price is not positive.", [begin, end])
@@ -783,6 +792,8 @@ def _annual_views(c: CompanyInputs) -> list:
                                 f"{prev} year end" if prev else f"FY{fiscal_year(fy) - 1} year end", growth,
                                 tax_rate=c.periods[fy].get("statutory_tax_rate"),
                                 prior_flows=_split(c.periods[prev])[0] if prev else None)))
+    for _, view in views:
+        view.interest_rule = c.interest_rule
     return views
 
 
@@ -817,6 +828,7 @@ def _ttm_view(c: CompanyInputs, fy_label: str, cur_label: str, prior_label: str,
     view = _View(label, flows, closing, f"{cur_label} period end", opening, f"{prior_label} period end", growth, price,
                  fy.get("statutory_tax_rate"), annual, price_points=price_points)
     view.not_comparable = not_comparable
+    view.interest_rule = c.interest_rule
     return view
 
 
@@ -906,6 +918,7 @@ def analyse(c: CompanyInputs) -> dict:
     annual = _annual_views(c)
     history = {fy: [_run(s, v, c.business_model) for s in SPECS if not (s.needs_price or s.multi_year or s.historical)] for fy, v in annual}
     current_view = _current_view(c, annual)
+    current_view.price_note = c.price_note
     current = {s.id: _run(s, current_view, c.business_model) for s in SPECS if not s.historical}
     current.update(_historical(c, current))
     notes = [c.demo_label] if c.demo_label else []

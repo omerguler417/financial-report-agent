@@ -109,3 +109,15 @@ def test_demo_company_has_price_returns_and_historical_medians_from_what_was_kno
 def test_fewer_than_three_year_ends_give_no_historical_median():
     r = {x.indicator: x for x in ind.analyse(demo_company_inputs(D.TARGET, date(2023, 11, 20)))["current"]}
     assert r["pe_hist_median"].status == "missing" and "fewer than three" in r["pe_hist_median"].note
+
+
+def test_the_us_gaap_interest_rule_lets_standardised_fcf_be_built_without_an_interest_amount():
+    c = extended()
+    for period in c.periods.values():
+        period.pop("interest_paid_in_cfo", None)
+    assert current(c)["p_fcf"].value == pytest.approx(2000 / 90)  # without the rule: reported basis
+    c.interest_rule = "US GAAP classifies interest paid within operating activities (ASC 230), so no interest adjustment is needed."
+    r = current(c)["p_fcf"]
+    assert r.value == pytest.approx(2000 / 83)
+    fcf = next(i for i in r.inputs if i["name"] == "fcf_standardised")
+    assert fcf["value"] == pytest.approx(83)

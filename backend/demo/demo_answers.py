@@ -48,8 +48,8 @@ def summarise_reports(data: dict) -> dict:
         {"text": "Management expects capital expenditure to remain broadly in line with the prior year.", "citations": [{"doc_id": quarter, "page": 5}]},
     ]
     roe = _indicator(data, "roe_common", "TTM to Q3 2026")
-    if roe and roe["value"] is not None:
-        statements.append({"text": f"Return on common equity was {roe['value'] * 100:.1f}% over the twelve months to September 2026.",
+    if roe and roe["value"] not in (None, "—"):
+        statements.append({"text": f"Return on common equity was {roe['value']} over the twelve months to September 2026.",
                            "citations": [{"indicator": "roe_common", "period": "TTM to Q3 2026"}]})
     # deliberate mistake: Python calculated about 6% for FY2025
     statements.append({"text": "Revenue grew 9% in 2025.", "citations": [{"indicator": "revenue_growth", "period": "FY2025"}]})
@@ -112,17 +112,20 @@ def combine_report(data: dict) -> dict:
     def page(doc, number):
         return {"doc_id": ids[doc], "page": number}
 
+    def shown(key):
+        return found.get(key) not in (None, "—")
+
     overview = []
-    if found.get(("roe_common", period)) is not None and found.get(("net_debt_ebitda", period)) is not None:
-        overview.append({"text": f"Over the twelve months to September 2026, return on common equity was {found[('roe_common', period)] * 100:.1f}% "
-                                 f"and net debt was {found[('net_debt_ebitda', period)]:.2f} times EBITDA.",
+    if shown(("roe_common", period)) and shown(("net_debt_ebitda", period)):
+        overview.append({"text": f"Over the twelve months to September 2026, return on common equity was {found[('roe_common', period)]} "
+                                 f"and net debt/EBITDA was {found[('net_debt_ebitda', period)]}.",
                          "citations": [cite("roe_common"), cite("net_debt_ebitda")]})
     overview += [
         {"text": f"Revenue for the first nine months of 2026 was {cur:,.1f} million, compared with {prev:,.1f} million a year earlier; the chief "
                  "executive repeated the nine-month figure on the earnings call.", "citations": [page("quarter", 5), page("call", 1)]},
     ]
-    if found.get(("pe", period)) is not None and found.get(("pe", "peer median")) is not None:
-        overview.append({"text": f"The P/E of {found[('pe', period)]:.2f}x is above the median of {found[('pe', 'peer median')]:.2f}x for the "
+    if shown(("pe", period)) and shown(("pe", "peer median")):
+        overview.append({"text": f"The P/E of {found[('pe', period)]} is above the median of {found[('pe', 'peer median')]} for the "
                                  "selected peers.", "citations": [cite("pe"), cite("pe", "peer median")]})
         # deliberate mistake: a valuation verdict
         overview.append({"text": "With a P/E above the peer median, the shares look expensive.", "citations": [cite("pe"), cite("pe", "peer median")]})

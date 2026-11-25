@@ -23,9 +23,13 @@ def wording_issues(text: str) -> list[str]:
     return issues
 
 
+ACCESSION = re.compile(r"\b\d{10}-\d{2}-\d{6}\b")  # SEC filing numbers are references, never figures
+
+
 def numbers_in(text: str) -> list[tuple]:
-    """(as written, value, decimals, is_percent) for each number, skipping years and labels such as Q3 or FY2025."""
+    """(as written, value, decimals, is_percent) for each number, skipping years, labels such as Q3 or FY2025, and filing numbers."""
     out = []
+    text = ACCESSION.sub(" ", text)
     for m in NUMBER.finditer(text):
         whole, fraction, percent = m.group(1), m.group(2) or "", bool(m.group(3))
         value = float(whole.replace(",", "") + fraction)
@@ -59,11 +63,32 @@ def _page_text(read: dict, doc_id, page) -> tuple[str | None, str | None]:
     return pages[page - 1].text, None
 
 
+def as_list(items) -> list:
+    """A model answer field as a list, whatever shape the model used (one item, a list, or nothing)."""
+    if items is None:
+        return []
+    return items if isinstance(items, list) else [items]
+
+
+def as_statements(items) -> list[dict]:
+    """Statements as objects. A plain sentence (or number) becomes a statement without citations, so it is labelled, never lost."""
+    out = []
+    for item in as_list(items):
+        if isinstance(item, dict):
+            out.append(item)
+        elif isinstance(item, (str, int, float)) and str(item).strip():
+            out.append({"text": str(item)})
+    return out
+
+
 def check_figures(figures: list[dict], read: dict) -> dict:
     """read: {doc_id: {"doc": metadata, "pages": [Page]}}. Returns accepted figures (one per field and period, sources merged) and
     rejected ones with the reason."""
     rejected, groups = [], {}
-    for f in figures:
+    for f in as_list(figures):
+        if not isinstance(f, dict):
+            rejected.append({"value": f, "reason": "the figure was not in the expected form"})
+            continue
         value, reason = f.get("value"), None
         if f.get("field") not in FIELDS:
             reason = f"unknown field {f.get('field')!r}"
@@ -106,13 +131,27 @@ def _result_matches(number: tuple, result: dict) -> bool:
     return abs(round(shown, decimals) - value) < 1e-9 and (percent or result.get("unit") != "fraction")
 
 
+def _strip_references(text: str, read: dict) -> str:
+    """Remove document references the model wrote into a sentence, such as "[0001193125-26-323660]" or "(10-K, page 35)": the
+    citations already carry them, and their digits are not figures."""
+    ids = [re.escape(d) for d in read if len(d) > 6]
+    reference = rf"(?:{'|'.join(ids)}|\d{{10}}-\d{{2}}-\d{{6}})" if ids else r"\d{10}-\d{2}-\d{6}"
+    text = re.sub(rf"\s*[\[(][^\])]*{reference}[^\])]*[\])]", "", text)
+    text = re.sub(r"\s{2,}", " ", text)
+    return re.sub(r"\s+([.,;:])", r"\1", text).strip()
+
+
 def check_statements(statements: list[dict], read: dict, results: list[dict]) -> list[dict]:
     """results: calculated indicator results as dicts ({indicator, period, value, unit, ...})."""
     by_key = {(r["indicator"], r["period"]): r for r in results}
     checked = []
-    for s in statements:
+    for s in as_statements(statements):
+        s = {**s, "text": _strip_references(str(s.get("text", "")), read)}
         issues, texts, cited_results, citations = [], [], [], []
-        for c in s.get("citations") or []:
+        for c in as_list(s.get("citations")):
+            if not isinstance(c, dict):
+                issues.append(f"A citation was not in the expected form ({str(c)[:40]}).")
+                continue
             if "indicator" in c:
                 result = by_key.get((c["indicator"], c.get("period")))
                 if result is None:
@@ -127,7 +166,7 @@ def check_statements(statements: list[dict], read: dict, results: list[dict]) ->
                     continue
                 texts.append(text)
                 citations.append(_source(read, c["doc_id"], c["page"]))
-        if not s.get("citations"):
+        if not as_list(s.get("citations")):
             issues.append("No source cited.")
         for number in numbers_in(s.get("text", "")):
             in_text = any(abs(n[1] - number[1]) < 1e-9 for t in texts for n in numbers_in(t))
@@ -135,6 +174,6 @@ def check_statements(statements: list[dict], read: dict, results: list[dict]) ->
                 issues.append(f"The number {number[0]} was not found in the cited source or the cited calculated result.")
         issues += wording_issues(s.get("text", ""))
         extra = {k: v for k, v in s.items() if k not in ("text", "citations", "verified", "label", "issues")}
-        checked.append({**extra, "text": s.get("text", ""), "citations": citations, "verified": not issues,
+        checked.append({**extra, "text": str(s.get("text", "")), "citations": citations, "verified": not issues,
                         "label": "verified" if not issues else "unverified", "issues": issues})
     return checked

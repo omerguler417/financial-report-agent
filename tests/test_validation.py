@@ -105,3 +105,13 @@ def test_extra_fields_are_kept_and_news_sources_show_publisher_and_date():
     [s] = V.check_statements([{"text": "A regulator proposed tighter limits.", "speaker": "News", "citations": [{"doc_id": "n1", "page": 1}]}], read, [])
     assert s["verified"] and s["speaker"] == "News"
     assert s["citations"][0]["publisher"] == "Example Wire" and s["citations"][0]["published"] == "2026-10-30"
+
+
+def test_document_references_in_the_text_are_removed_not_mistaken_for_figures():
+    read = {**READ, "0001193125-26-323660": {"doc": {"doc_id": "0001193125-26-323660", "title": "10-K"},
+                                              "pages": rr.pages_from_texts(["Microsoft Cloud revenue increased 27% to $214.4 billion."])}}
+    [s] = V.check_statements([statement("Microsoft Cloud revenue increased 27% to $214.4 billion. [0001193125-26-323660] "
+                                        "(0001193125-26-323660, page 1)", {"doc_id": "0001193125-26-323660", "page": 1})], read, RESULTS)
+    assert s["verified"], s["issues"]
+    assert s["text"] == "Microsoft Cloud revenue increased 27% to $214.4 billion."
+    assert V.numbers_in("Filing 0001193125-26-323660 shows 27%.") == [("27%", 27.0, 0, True)]

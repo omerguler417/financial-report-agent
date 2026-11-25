@@ -80,16 +80,21 @@
                   <input type="file" id="file-input" hidden>
                 </div>
                 <progress id="upload-progress" max="100" value="0" hidden></progress>
-                <p class="hint" id="upload-limits">Uploads are kept with your files under Services &amp; setup and labelled as uploads. They are not yet used in the analysis.</p>
+                <p class="hint" id="upload-limits">Uploads are kept with your files under Services &amp; setup and labelled as uploads.</p>
                 <p class="message" id="upload-message" role="status"></p>
               </div>
+              <label class="field">
+                <span class="label">Earnings-call transcript <em class="optional">optional, live analyses</em></span>
+                <select id="transcript-upload"><option value="">None</option></select>
+                <span class="hint">An uploaded transcript (text, PDF, Word or HTML) for Agent 2 to analyse.</span>
+              </label>
               <fieldset class="field">
                 <legend class="label">Data</legend>
                 <div class="segmented">
                   <label><input type="radio" name="mode" value="live" checked><span>Live data</span></label>
                   <label><input type="radio" name="mode" value="demo"><span>Demo (fictional data)</span></label>
                 </div>
-                <p class="hint">Live analyses need the data providers, which are added at the API stage; until then a live run lists the services it still needs. Demo companies: Northgate (NRTH.DEMO), Ridgeway (RDGE.DEMO), Saltlake (SLTK.DEMO), Carbonfield (CRBN.DEMO), Lakeshore Bank (LKSB.DEMO).</p>
+                <p class="hint">Live analyses work for SEC filers: figures come from SEC EDGAR, the text parts from your configured text model. Share prices and news have no provider yet and are shown as not available. Demo companies: Northgate (NRTH.DEMO), Ridgeway (RDGE.DEMO), Saltlake (SLTK.DEMO), Carbonfield (CRBN.DEMO), Lakeshore Bank (LKSB.DEMO).</p>
               </fieldset>
               <button class="btn btn-green btn-block" type="submit">Run analysis</button>
               <div id="analysis-status" class="analysis-status" role="status"></div>

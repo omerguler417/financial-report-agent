@@ -10,7 +10,9 @@ SOURCE_OFFICIAL_REPORT = "official_report"
 SOURCE_INVESTOR_PRESENTATION = "investor_presentation"
 SOURCE_MODEL = "model_suggestion"
 SOURCE_USER = "user_selected"
-VERIFYING_SOURCES = {SOURCE_PROVIDER, SOURCE_OFFICIAL_REPORT, SOURCE_INVESTOR_PRESENTATION}
+SOURCE_REGULATOR = "regulator_classification"  # for example the SEC's industry code (SIC)
+VERIFYING_SOURCES = {SOURCE_PROVIDER, SOURCE_OFFICIAL_REPORT, SOURCE_INVESTOR_PRESENTATION, SOURCE_REGULATOR}
+LIMITED_NOTE = "It could not be compared on products, customers and regions, which the available data does not include."
 
 METHOD = ("Peers are ordered by these criteria in turn, not by a combined score: (1) same industry and the number of "
           "business-model criteria that match (products, customer groups, revenue segments, operating model); "
@@ -121,9 +123,12 @@ def assess(target: Profile, cand: Profile, settings: Settings) -> dict:
     matches = sum(c["result"] == "match" for c in business)
     differs = sum(c["result"] == "differs" for c in business)
     suitable = industry["result"] != "differs" and matches >= 1 and matches >= differs
+    # decided 25 November 2026: with no business information at all, the same official industry code counts, as limited comparability
+    limited = not suitable and industry["result"] == "match" and all(c["result"] == "unknown" for c in business)
     all_criteria = [industry, *business, geography, *size]
     return {
-        "suitable": suitable,
+        "suitable": suitable or limited,
+        "limited": limited,
         "criteria": all_criteria,
         "missing_information": [c["criterion"] for c in all_criteria if c["result"] == "unknown"],
         "order_key": (
@@ -163,7 +168,7 @@ def select_peers(target: Profile, candidates: list[Candidate], settings: Setting
                       "criteria": a["criteria"], "missing_information": a["missing_information"], "explanation": explanation})
 
     pool = []
-    for cand in candidates:
+    for position, cand in enumerate(candidates):
         if cand in user_picks or cand.profile.ticker.upper() == target.ticker.upper():
             continue
         if not cand.verified:
@@ -174,8 +179,9 @@ def select_peers(target: Profile, candidates: list[Candidate], settings: Setting
         if not a["suitable"]:
             excluded.append({"ticker": cand.profile.ticker, "reason": "Not suitable: " + _explain(cand, a), "sources": cand.sources})
             continue
-        pool.append((cand, a))
-    pool.sort(key=lambda pair: (pair[1]["order_key"], pair[0].profile.ticker))
+        pool.append((cand, a, position))
+    pool.sort(key=lambda entry: (entry[1]["order_key"], entry[2]))  # ties keep the candidates' order (for example closest in size)
+    pool = [(cand, a) for cand, a, _ in pool]
 
     places = max(0, total - len(peers))
     if index_filter:
@@ -190,8 +196,11 @@ def select_peers(target: Profile, candidates: list[Candidate], settings: Setting
         chosen = pool[:places]
 
     for cand, a in chosen:
-        peers.append({"ticker": cand.profile.ticker, "name": cand.profile.name, "label": "selected", "sources": cand.sources,
-                      "criteria": a["criteria"], "missing_information": a["missing_information"], "explanation": _explain(cand, a)})
+        limited = a.get("limited")
+        peers.append({"ticker": cand.profile.ticker, "name": cand.profile.name,
+                      "label": "selected (matched on SEC industry code and size only)" if limited else "selected", "sources": cand.sources,
+                      "criteria": a["criteria"], "missing_information": a["missing_information"],
+                      "explanation": _explain(cand, a) + (" " + LIMITED_NOTE if limited else "")})
 
     minimum = min(settings.min_peers, total)
     if len(peers) < minimum:

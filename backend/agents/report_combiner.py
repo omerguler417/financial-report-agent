@@ -1,7 +1,7 @@
 # Agent 3: combines Agents 1 and 2 into one report: an overview, where the sources disagree (each position labelled with who said it),
 # the main risks, and, built in Python, what is missing, what could not be verified, and the limitations. It never calculates: every
 # number must come from a cited source or a Python result, and every statement is checked like the other agents' statements.
-from backend import prompts, validation
+from backend import prompts, report_blocks, validation
 
 AGENT = "Agent 3 – combined report"
 US_EXCHANGES = {"NYSE", "NASDAQ", "NYSE AMERICAN", "AMEX", "NYSEARCA", "ARCA"}
@@ -20,8 +20,8 @@ def _payload(company: dict, agent1: dict, agent2: dict, results: list[dict]) -> 
     return {
         "ticker": company["ticker"], "company": company["name"],
         "agent1_summary": [{"text": s["text"], "citations": s["citations"]} for s in agent1["summary"] if s["verified"]],
-        "indicators": [{k: r.get(k) for k in ("indicator", "name", "period", "status", "value", "unit")} for r in results
-                       if r["period"] in (current, "peer median")],
+        "indicators": [{**{k: r.get(k) for k in ("indicator", "name", "period", "status")}, "value": report_blocks.display(r.get("value"), r.get("unit"))}
+                       for r in results if r["period"] in (current, "peer median")],
         "call": [{k: s.get(k) for k in ("kind", "speaker", "text", "citations")} for s in agent2["call"]["statements"] if s["verified"]],
         "news": [{k: i.get(k) for k in ("id", "publisher", "published", "title", "channel")} for i in agent2["news"]["included"] if i["verified"]],
     }
@@ -67,11 +67,13 @@ def run(company: dict, agent1: dict, agent2: dict, services, context: dict) -> d
             s["based_on"] = sorted({_origin(c, read) for c in s["citations"]})
         return checked
 
-    overview, risks = check(answer.get("overview", [])), check(answer.get("risks", []))
+    overview, risks = check(answer.get("overview")), check(answer.get("risks"))
     disagreements = []
-    for d in answer.get("disagreements", []):
-        positions = check(d.get("positions", []))
-        entry = {"topic": d.get("topic", ""), "positions": positions}
+    for d in validation.as_list(answer.get("disagreements")):
+        if not isinstance(d, dict):  # a plain sentence: kept as a topic without positions
+            d = {"topic": str(d), "positions": []}
+        positions = check(d.get("positions"))
+        entry = {"topic": str(d.get("topic", "")), "positions": positions}
         if len({o for p in positions for o in p["based_on"]}) < 2:
             entry["note"] = "All positions come from the same source, so this is not a disagreement between sources."
         disagreements.append(entry)

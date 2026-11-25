@@ -84,3 +84,14 @@ def test_the_page_and_its_script_are_always_rechecked_by_the_browser(demo):
     client, _, _ = demo  # browsers must not keep showing an old copy of the page after an update
     for path in ("/", "/static/app.js", "/static/styles.css"):
         assert client.get(path).headers.get("cache-control") == "no-cache", path
+
+
+def test_edgar_figures_are_cited_by_filing_statement_and_tag_not_by_page():
+    result = {"inputs": [{"sources": [{"doc_id": "0000789019-25-000010", "title": "10-K for the period ended 2025-06-30 (filed 2025-07-30)",
+                                        "section": "income statement", "tag": "us-gaap:Revenues", "published": "2025-07-30"},
+                                       {"doc_id": "0000789019-25-000010", "title": "10-K for the period ended 2025-06-30 (filed 2025-07-30)",
+                                        "section": "balance sheet", "tag": "us-gaap:Assets", "published": "2025-07-30"}]}]}
+    text = report_blocks._input_sources(result)
+    assert "p. None" not in text
+    assert text == ("10-K for the period ended 2025-06-30 (filed 2025-07-30), income statement (us-gaap:Revenues); "
+                    "balance sheet (us-gaap:Assets)")

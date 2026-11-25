@@ -35,21 +35,24 @@ FEATURES = {
         "Temporary-file cleanup after 7 days; saved reports kept until deleted",
         "Price freshness rules for US exchanges",
         "Peer selection from supplied candidate data",
-        "Demo data and demo stand-ins for each service (step 1; not yet selectable on the website)",
+        "Demo data and demo stand-ins for each service, chosen with the Demo option for a whole analysis",
         "Reading PDF, Word, Excel, HTML and text documents with page, section or sheet numbers, and finding the relevant pages (step 2)",
         "59 indicators from v1.0 sections 5 and 6 with sources, history, peer medians and historical medians; standardised FCF with the reported figure alongside",
         "Choosing indicators by group or one by one; the report shows only the chosen ones",
         "Demo analysis on the website: company, peers, Agents 1, 2 and 3 with every statement checked, shown as a report (steps 4 and 5a)",
         "Report download as PDF (default) or Word, with the DEMO label on every page of a demo report (step 5b)",
         "folio. website design: sidebar pages for a new analysis, agent workflow, dashboard with five tabs and a chart, sources and transcripts, my reports (in this browser) and services",
+        "Share prices from Twelve Data (actual and split-adjusted daily closes, latest completed session) for price-based indicators, returns and historical medians",
+        "Automatic peers for SEC filers: same SEC industry code, closest in revenue, labelled as limited comparability",
+        "Live analyses of SEC filers: figures from SEC EDGAR (XBRL), the latest 10-K and 10-Q read for the summary, an uploaded call transcript for Agent 2, text parts from the configured text model; share prices and news shown as not available",
     ],
     "awaiting_implementation": [
-        "Provider adapters for the services you choose later (text model, speech-to-text, market data, news)",
-        "Finding reports on investor relations sites and regulator fallbacks",
+        "A news provider; richer peer comparison (products, customers and regions) than the SEC industry code allows",
+        "Reports for companies outside SEC EDGAR (investor-relations sites, other regulators)",
         "Gathering peer candidates automatically",
         "Bank indicators (v1.0 section 8, part C) and the holding-company module (section 7, part D)",
         "Choosing the horizon, and extra questions, in the New analysis form (shown as coming later)",
-        "Using uploaded files in the analysis; a list of past analyses kept on the server",
+        "Using uploaded reports in place of EDGAR filings; a list of past analyses kept on the server",
     ],
 }
 
@@ -67,6 +70,7 @@ class AnalysisRequest(BaseModel):
     peers: list[str] = []
     as_of: date | None = None  # analysis date; reports published later are left out
     indicators: list[str] | None = None  # indicator ids to report; all when left out
+    transcript_upload: str | None = None  # an uploaded earnings-call transcript for Agent 2 (live analyses)
 
 
 class PeerRequest(BaseModel):
@@ -76,7 +80,7 @@ class PeerRequest(BaseModel):
     requested_total: int | None = None
 
 
-def create_app(settings: Settings | None = None, provider_factory=None, run=None, background_jobs: bool = True) -> FastAPI:
+def create_app(settings: Settings | None = None, provider_factory=None, run=None, background_jobs: bool = True, transport=None) -> FastAPI:
     settings = settings or get_settings()
     store = storage.Store(settings.storage_dir)
     jobs = transcription.TranscriptionJobs(
@@ -92,7 +96,7 @@ def create_app(settings: Settings | None = None, provider_factory=None, run=None
         yield
 
     app = FastAPI(title="Financial Report Analysis Agent", lifespan=lifespan)
-    analyses = pipeline.AnalysisJobs(store, settings)
+    analyses = pipeline.AnalysisJobs(store, settings, transport)
     app.state.settings, app.state.store, app.state.jobs, app.state.analyses = settings, store, jobs, analyses
 
     @app.middleware("http")
@@ -221,9 +225,17 @@ def create_app(settings: Settings | None = None, provider_factory=None, run=None
             unknown = sorted(set(req.indicators) - set(indicators.SPECS_BY_ID))
             if unknown:
                 raise HTTPException(400, f"Unknown indicators: {', '.join(unknown)}.")
+        if req.transcript_upload:
+            try:
+                upload = store.get(req.transcript_upload)
+            except storage.NotFound:
+                raise HTTPException(404, "The transcript upload was not found.")
+            if upload["kind"] != "document":
+                raise HTTPException(400, "The transcript must be a text, PDF, Word or HTML file; transcribe a recording first.")
         try:
             target = language.resolve_output_language(req.output_language, settings)
-            state = analyses.create(req.company, req.demo, target, req.peers, req.as_of or date.today(), req.indicators)
+            state = analyses.create(req.company, req.demo, target, req.peers, req.as_of or date.today(), req.indicators,
+                                    req.transcript_upload)
         except language.UnsupportedLanguage as exc:
             raise HTTPException(400, str(exc))
         except pipeline.CompanyNotFound as exc:

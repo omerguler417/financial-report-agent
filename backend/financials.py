@@ -78,12 +78,20 @@ def price_figure(quote, demo: bool = False) -> Figure:
                   "Stale price: the latest expected session is missing." if quote.stale else "")
 
 
+def _now(tz):
+    return datetime.now(tz)
+
+
 def _quote(market, ticker: str, on):
+    """The close for `on`. For today (or later), only a completed session counts, never today's unfinished trading (v1.0)."""
     from datetime import timedelta
     from backend.fetchers.market_data import select_quote
     series = market.daily_series(ticker, on - timedelta(days=14), on)
-    now = datetime(on.year, on.month, on.day, 23, 59, tzinfo=ZoneInfo(series.timezone))
-    return select_quote(series, now, on_date=on)
+    tz = ZoneInfo(series.timezone)
+    now = _now(tz)
+    if on >= now.date():
+        return select_quote(series, now)
+    return select_quote(series, datetime(on.year, on.month, on.day, 23, 59, tzinfo=tz), on_date=on)
 
 
 def closing_price(market, ticker: str, on, demo: bool = False) -> Figure:

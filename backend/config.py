@@ -47,6 +47,7 @@ class Settings:
     market_data_provider: str = field(default_factory=lambda: _env("MARKET_DATA_PROVIDER", ""))
     market_data_api_key: str = field(default_factory=lambda: _env("MARKET_DATA_API_KEY", ""), repr=False)
     market_data_base_url: str = field(default_factory=lambda: _env("MARKET_DATA_BASE_URL", ""))
+    market_data_min_interval_seconds: float = field(default_factory=lambda: _env("MARKET_DATA_MIN_INTERVAL_SECONDS", 7.5, float))
     # News search.
     news_provider: str = field(default_factory=lambda: _env("NEWS_PROVIDER", ""))
     news_api_key: str = field(default_factory=lambda: _env("NEWS_API_KEY", ""), repr=False)

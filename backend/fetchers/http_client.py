@@ -14,6 +14,12 @@ RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 MAX_RETRY_AFTER_SECONDS = 300
 
 
+# Hosts whose robots.txt is not applied, each decided by the group and recorded in CLAUDE.md. No other host is exempt.
+ROBOTS_EXCEPTIONS = {
+    "api.twelvedata.com": "Twelve Data's official API used with the group's own key (CLAUDE.md; docs/twelvedata_robots_exception.md)",
+}
+
+
 class AccessDenied(Exception):
     """The site's rules or response forbid this request. We never try to get around it."""
 
@@ -30,6 +36,7 @@ class _Host:
         self.robots = None
         self.robots_loaded = False
         self.crawl_delay = 0.0
+        self.min_interval = 0.0  # a provider's own pace, for example a per-minute request limit
 
 
 class PoliteClient:
@@ -56,13 +63,17 @@ class PoliteClient:
             return self._hosts[host]
 
     def _wait_for_turn(self, state: _Host) -> None:
-        interval = max(self.settings.min_seconds_between_requests_per_host, state.crawl_delay)
+        interval = max(self.settings.min_seconds_between_requests_per_host, state.crawl_delay, state.min_interval)
         with state.lock:
             if state.last_request is not None:
                 remaining = interval - (self.clock() - state.last_request)
                 if remaining > 0:
                     self.sleep(remaining)
             state.last_request = self.clock()
+
+    def set_min_interval(self, host: str, seconds: float) -> None:
+        """Space requests to one host at least `seconds` apart, for a provider's per-minute limit."""
+        self._host(host.lower()).min_interval = seconds
 
     def _backoff(self, attempt: int) -> float:
         return self.settings.backoff_base_seconds * (2 ** attempt)
@@ -103,18 +114,27 @@ class PoliteClient:
 
     def allowed(self, url: str) -> bool:
         parts = urlsplit(url)
+        if parts.netloc.lower() in ROBOTS_EXCEPTIONS:
+            return True
         state = self._host(parts.netloc)
         self._load_robots(parts.scheme, parts.netloc, state)
         return state.robots is None or state.robots.can_fetch(self.settings.user_agent, url)
 
-    def _send(self, url: str, state: _Host):
+    def _headers_for(self, url: str) -> dict | None:
+        """The SEC asks automated clients to identify themselves with an application name and a contact address."""
+        host = urlsplit(url).netloc.lower()
+        if (host == "sec.gov" or host.endswith(".sec.gov")) and self.settings.sec_user_agent:
+            return {"User-Agent": self.settings.sec_user_agent}
+        return None
+
+    def _send(self, url: str, state: _Host, headers: dict | None = None):
         """One request with rate limits and retries; returns the final response."""
         attempts = self.settings.max_retries + 1
         for attempt in range(attempts):
             with state.slots:
                 self._wait_for_turn(state)
                 try:
-                    response = self._client.get(url)
+                    response = self._client.get(url, headers={**(self._headers_for(url) or {}), **(headers or {})} or None)
                 except httpx2.TransportError as exc:
                     if attempt == attempts - 1:
                         raise FetchFailed(f"{url}: {exc}") from exc
@@ -130,7 +150,7 @@ class PoliteClient:
             self.sleep(wait if wait is not None else self._backoff(attempt))
         raise FetchFailed(url)  # unreachable
 
-    def get(self, url: str, params: dict | None = None):
+    def get(self, url: str, params: dict | None = None, headers: dict | None = None):
         if params:
             url = str(httpx2.URL(url, params=params))
         parts = urlsplit(url)
@@ -138,7 +158,7 @@ class PoliteClient:
             raise FetchFailed(f"Unsupported URL: {url}")
         if not self.allowed(url):
             raise AccessDenied(f"{url} is disallowed by {parts.netloc}/robots.txt")
-        response = self._send(url, self._host(parts.netloc))
+        response = self._send(url, self._host(parts.netloc), headers)
         if response.status_code in (401, 403):
             raise AccessDenied(f"{url}: access refused (HTTP {response.status_code}).")
         if response.status_code >= 400:
