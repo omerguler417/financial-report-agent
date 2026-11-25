@@ -56,8 +56,9 @@ def company_inputs(company: dict, services, as_of: date, demo_label: str | None 
     answer = services.model.ask(request["task"], request["data"])
     check = validation.check_figures(answer.get("figures", []), read)
     price = financials.closing_price(services.market, company["ticker"], as_of, demo=bool(demo_label))
+    points = financials.price_points(services.market, company["ticker"], as_of, demo=bool(demo_label))
     model = financials.business_model(services.market.profile(company["ticker"]))
-    inputs = financials.build_inputs(company["name"], check["accepted"], price, model, demo_label)
+    inputs = financials.build_inputs(company["name"], check["accepted"], price, model, demo_label, points)
     return inputs, read, documents, check, notes
 
 
@@ -66,17 +67,27 @@ def _results(analysis: dict) -> list[dict]:
     return rows + [r.to_dict() for fy in analysis["history"].values() for r in fy]
 
 
-def run(company: dict, peer_selection: dict, services, as_of: date, context: dict | None = None) -> dict:
-    """context, when given, receives what Agent 3 needs to check its citations: the pages read and the calculated results."""
+def _keep(analysis: dict, chosen: set | None) -> dict:
+    """Only the indicators the user chose; everything is still calculated, because some indicators build on others."""
+    if not chosen:
+        return analysis
+    return {**analysis, "current": [r for r in analysis["current"] if r.indicator in chosen],
+            "history": {fy: [r for r in rows if r.indicator in chosen] for fy, rows in analysis["history"].items()}}
+
+
+def run(company: dict, peer_selection: dict, services, as_of: date, context: dict | None = None, chosen: list[str] | None = None) -> dict:
+    """context, when given, receives what Agent 3 needs to check its citations: the pages read and the calculated results.
+    chosen: the indicator ids the user wants reported (all when None)."""
     demo_label = getattr(services, "label", None)
+    chosen = set(chosen) if chosen else None
     inputs, read, documents, check, notes = company_inputs(company, services, as_of, demo_label)
-    analysis = indicators.analyse(inputs)
+    analysis = _keep(indicators.analyse(inputs), chosen)
 
     peer_analyses = {}
     for peer in peer_selection.get("peers", []):
         try:
             peer_inputs = company_inputs({"ticker": peer["ticker"], "name": peer["name"]}, services, as_of, demo_label)[0]
-            peer_analyses[peer["ticker"]] = indicators.analyse(peer_inputs)
+            peer_analyses[peer["ticker"]] = _keep(indicators.analyse(peer_inputs), chosen)
         except Exception as exc:  # one peer's missing data must not stop the analysis; it is reported instead
             notes.append(f"Peer {peer['ticker']} could not be analysed: {exc}")
     comparison = indicators.compare_with_peers(analysis, peer_analyses) if peer_analyses else []
@@ -100,7 +111,8 @@ def run(company: dict, peer_selection: dict, services, as_of: date, context: dic
         "summary": summary,
         "indicators": {"definition_version": analysis["definition_version"], "business_model": analysis["business_model"],
                        "current_period": analysis["current_period"], "current": [r.to_dict() for r in analysis["current"]],
-                       "history": {fy: [r.to_dict() for r in rs] for fy, rs in analysis["history"].items()}, "notes": analysis["notes"]},
+                       "history": {fy: [r.to_dict() for r in rs] for fy, rs in analysis["history"].items()}, "notes": analysis["notes"],
+                       "left_out": [s.name for s in indicators.SPECS if chosen and s.id not in chosen]},
         "peer_comparison": comparison,
         "extraction_check": {"accepted": len(check["accepted"]), "rejected": check["rejected"]},
         "notes": notes,

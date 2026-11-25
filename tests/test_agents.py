@@ -29,7 +29,7 @@ def test_agent1_reads_the_reports_checks_the_figures_and_calculates(tmp_path):
     out = run(tmp_path)
     assert out["agent"].startswith("Agent 1")
     current = {r["indicator"]: r for r in out["indicators"]["current"]}
-    assert current and all(r["status"] == "calculated" for r in current.values())
+    assert current and all(r["status"] in ("calculated", "reported_only") for r in current.values())
     assert out["indicators"]["current_period"] == "TTM to Q3 2026"
     [rejected] = out["extraction_check"]["rejected"]  # the demo's one deliberate mistake: right line, wrong page
     assert rejected["field"] == "pretax_income" and "not on page 5" in rejected["reason"]
@@ -148,5 +148,5 @@ def test_agent3_flags_verdicts_and_gathers_what_is_missing_or_unverified(tmp_pat
     unverified = {u["agent"]: u for u in a3["unverified_statements"]}
     assert set(unverified) == {"Agent 1", "Agent 2", "Agent 3"}  # 9% growth, the share-price claim, the verdict
     assert any("pretax_income" in m for m in a3["missing_information"])
-    assert any(D.DEMO_LABEL in lim for lim in a3["limitations"]) and any("reported FCF" in lim for lim in a3["limitations"])
+    assert any(D.DEMO_LABEL in lim for lim in a3["limitations"]) and any("standardised free cash flow" in lim for lim in a3["limitations"])
     assert a3["statement_check"]["unverified"] == 3

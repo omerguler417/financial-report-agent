@@ -33,13 +33,24 @@ FIELDS = {
     "non_operating_investments": "Non-operating financial investments, if shown separately",
     "shares_outstanding": "Common shares outstanding at the balance-sheet date",
     "statutory_tax_rate": "Home-country statutory income tax rate stated in the tax note (for US companies the federal rate), in percent",
+    "cost_of_sales": "Cost of sales (not for banks)",
+    "eps_basic": "Basic earnings per share as reported", "eps_diluted": "Diluted earnings per share as reported",
+    "weighted_shares_basic": "Weighted-average basic shares", "weighted_shares_diluted": "Weighted-average diluted shares",
+    "dividends_per_share": "Dividends paid per common share in the period",
+    "short_term_investments": "Liquid short-term investments", "trade_receivables": "Net trade receivables", "inventories": "Inventories",
+    "trade_payables": "Trade payables", "goodwill": "Goodwill", "intangible_assets": "Other intangible assets",
+    "free_float_shares": "Shares in free float, as defined by the source",
+    "interest_paid_in_cfo": "Cash interest paid, when it is classified within operating activities",
+    "interest_paid_outside_cfo": "Cash interest paid, when it is classified outside operating activities",
+    "lease_principal_outside_cfo": "Principal payments on lease liabilities classified outside operating activities",
+    "dividends_paid_in_cfo": "Shareholder dividends paid that are classified within operating activities",
 }
 
 YTD = re.compile(r"YTD (Q[1-4]|H[12]) (\d{4})")
 
 
 def build_inputs(name: str, figures: list[dict], price: Figure | None, business_model: str = "operating",
-                 demo_label: str | None = None) -> CompanyInputs:
+                 demo_label: str | None = None, points: dict | None = None) -> CompanyInputs:
     """figures: checked figures ({field, period, value, unit, sources}). Picks the latest fiscal year and, when one exists after it,
     the latest year-to-date period with the same period a year earlier, so TTM can be built."""
     periods: dict = {}
@@ -57,7 +68,7 @@ def build_inputs(name: str, figures: list[dict], price: Figure | None, business_
         prior_label = f"YTD {part} {year - 1}"
         if prior_label in periods:
             current, prior = label, prior_label
-    return CompanyInputs(name, periods, latest, current, prior, price, business_model, demo_label)
+    return CompanyInputs(name, periods, latest, current, prior, price, business_model, demo_label, points or {})
 
 
 def price_figure(quote, demo: bool = False) -> Figure:
@@ -67,13 +78,51 @@ def price_figure(quote, demo: bool = False) -> Figure:
                   "Stale price: the latest expected session is missing." if quote.stale else "")
 
 
-def closing_price(market, ticker: str, on, demo: bool = False) -> Figure:
-    """Closing price of the latest completed session on or before `on`."""
+def _quote(market, ticker: str, on):
     from datetime import timedelta
     from backend.fetchers.market_data import select_quote
     series = market.daily_series(ticker, on - timedelta(days=14), on)
     now = datetime(on.year, on.month, on.day, 23, 59, tzinfo=ZoneInfo(series.timezone))
-    return price_figure(select_quote(series, now, on_date=on), demo)
+    return select_quote(series, now, on_date=on)
+
+
+def closing_price(market, ticker: str, on, demo: bool = False) -> Figure:
+    """Closing price of the latest completed session on or before `on`."""
+    return price_figure(_quote(market, ticker, on), demo)
+
+
+def months_before(day, months: int):
+    year, month = divmod(day.year * 12 + day.month - 1 - months, 12)
+    month += 1
+    for d in (day.day, 30, 29, 28):  # the same day of the month, or the month's last day
+        try:
+            return day.replace(year=year, month=month, day=d)
+        except ValueError:
+            continue
+
+
+def price_points(market, ticker: str, on, demo: bool = False) -> dict:
+    """Split-adjusted closes for price returns (now, 1, 3 and 12 months earlier) and closes at the preceding five calendar year ends,
+    for historical multiple medians. A price that cannot be found is left out, never invented."""
+    from datetime import date
+    points = {}
+    wanted = {"end": on, "1m": months_before(on, 1), "3m": months_before(on, 3), "12m": months_before(on, 12)}
+    for key, day in wanted.items():
+        try:
+            q = _quote(market, ticker, day)
+        except Exception:
+            continue
+        adjusted = q.adjusted_close if q.adjusted_close is not None else q.close
+        source = {"publisher": q.source, "date": q.price_date, "exchange": q.exchange, **({"demo": True} if demo else {})}
+        points[key] = Figure("adjusted_close", adjusted, f"{q.currency} per share", f"close {q.price_date}", [source],
+                             "" if q.adjusted_close is not None else "No split-adjusted series; the plain close is used.")
+    for year in range(on.year - 1, on.year - 6, -1):
+        day = date(year, 12, 31)
+        try:
+            points[f"year end {day.isoformat()}"] = closing_price(market, ticker, day, demo)
+        except Exception:
+            continue
+    return points
 
 
 def business_model(profile: dict) -> str:

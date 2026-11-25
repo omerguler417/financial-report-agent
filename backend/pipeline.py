@@ -127,11 +127,11 @@ class AnalysisJobs:
         state["updated_at"] = _now()
         _write_whole(self._path(state["id"]), state)
 
-    def create(self, query: str, demo: bool, output_language: str, user_peers: list[str], as_of: date) -> dict:
+    def create(self, query: str, demo: bool, output_language: str, user_peers: list[str], as_of: date, chosen: list[str] | None = None) -> dict:
         services = self.services_for(demo)  # a live analysis stops here with the full list of services it still needs
         company = identify(query, services.market)
         state = {"id": uuid.uuid4().hex[:12], "query": query, "company": company, "demo": demo, "output_language": output_language,
-                 "user_peers": user_peers, "as_of": as_of.isoformat(), "status": "queued", "error": None, "steps_done": ["identify"],
+                 "user_peers": user_peers, "as_of": as_of.isoformat(), "indicators": chosen, "status": "queued", "error": None, "steps_done": ["identify"],
                  "current_step": "queued", "progress_percent": int(100 / len(STEPS)), "created_at": _now()}
         self._save(state)
         return state
@@ -167,7 +167,7 @@ class AnalysisJobs:
             self._step(state, "peers", done=True)
             context: dict = {}  # pages read and results, so Agent 3's citations can be checked against them
             self._step(state, "agent1")
-            agent1 = financial_analyst.run(company, peers, services, as_of, context)
+            agent1 = financial_analyst.run(company, peers, services, as_of, context, state.get("indicators"))
             self._step(state, "agent1", done=True)
             self._step(state, "agent2")
             agent2 = meeting_news_analyst.run(company, services, as_of, context)

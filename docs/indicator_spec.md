@@ -299,6 +299,16 @@ Recorded 18 November 2026. Documentation only: no code has been changed yet. Eac
 - **No figures are calculated in the browser.** Cards and tables show the values Python formatted (`/view`); the chart plots Python's values and only works out drawing positions. Before an analysis has run, pages show empty states, never sample figures. Nothing is loaded from outside the project (system fonts; Inter only if installed).
 - **FFmpeg setup text** now says it is only needed for uploaded recordings and gives the Mac and Windows install commands, instead of "add to .env".
 
+### Decisions for the remaining v1.0 indicators (25 November 2026, branch `v3-frontend`)
+
+- **Deadline moved to 1 December 2026.**
+- **Scope.** Add the rest of v1.0 section 5 and all of section 6 (part B), the bank module of section 8 (part C) and the holding module of section 7 (part D), each approved and checked in turn. Not included: the optional section 9 modules (deferred by `CLAUDE.md`) and the two forward measures (they need a dated consensus source).
+- **Dropped by decision:** the interest-rate shock sensitivity and the cross-source discrepancy (no second data source). They are not calculated or shown.
+- **Free cash flow.** Comparisons use v1.0's standardised FCF (standardised CFO − capex; standardised CFO is after cash interest and lease principal). The reported figure (CFO − capex) is kept alongside. Where the adjustments are not in the inputs, reported FCF is used and labelled, as v1.0 allows.
+- **Historical multiple medians.** Calculated at the preceding fiscal year-ends from the price and the reports published by each date. The demo gets the past Q3 reports this needs.
+- **Demo holding company (part D).** A fictional `.DEMO` company, labelled like the other demo data, used only in demo analyses and never mixed with live data.
+- **Choosing indicators.** The New analysis form lists every indicator by group; the user can untick groups or single indicators (all ticked by default). The report, PDF and Word show only the chosen ones and list what was left out.
+
 ## Unresolved definitions and assumptions
 
 These choices were open. Most are now resolved by `indicator_definitions.md` v1.0 (marked [x]); the rest remain open and must not be resolved silently in code.
@@ -372,6 +382,8 @@ These are not part of the original brief and are added here for review.
 | Analysis pipeline, step 4a: company identification, peer choice, Agent 1 (reports read into pages, figures extracted and checked, indicators, checked summary), background progress, `POST /api/analyses`, `GET /api/analyses/{id}`, `GET /api/analyses/{id}/report` | Working and tested in demo mode (22 November 2026); live mode returns the list of services still needed (HTTP 424); not yet on the website |
 | Agents 2 and 3, step 4b: earnings call (management, guidance and analysts kept apart), news review with source details, combined report with disagreements, risks, missing information, unverified statements and limitations; wording checks | Working and tested in demo mode (22 November 2026); not yet on the website |
 | Website, step 5a: "Run an analysis" box (company, demo tick box, progress, choice when several companies match, list of missing services for a live run) and the report view; `GET /api/analyses/{id}/view` | Working; the layout is tested, the page itself is not yet checked in a browser (22 November 2026) |
+| Parts A and B (branch `v3-frontend`): choosing indicators (form, `indicators` in `POST /api/analyses`, catalogue in `/api/config`); the rest of v1.0 section 5 and all of section 6 (59 indicators in 7 groups); standardised CFO/FCF with the reported basis alongside; reported EPS; price returns; historical multiple medians from what was published by each year end; demo reports with the new figures and Q3 reports for 2021–2024 | Working and tested on sample and demo data (25 November 2026) |
+| Parts C (bank module) and D (holding module, with a demo holding company) | Awaiting approval |
 | folio. website design (branch `v3-frontend`): six pages, workflow progress per agent, dashboard tabs, SVG chart, sources with details, printable report with cover, mobile menu | Built; tested by page tests and by running the page script against a demo analysis outside a browser; not yet checked in a browser (25 November 2026) |
 | PDF (default) and Word download, step 5b: `GET /api/analyses/{id}/download/pdf` and `/docx`, DEMO label on every page | Working and tested (25 November 2026) |
 

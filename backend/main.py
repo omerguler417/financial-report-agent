@@ -15,7 +15,7 @@ from pydantic import BaseModel
 # Values are never printed or logged.
 load_dotenv()
 
-from backend import (language, llm, peer_selection, pipeline, report_blocks, report_export, report_reader, services,  # noqa: E402
+from backend import (indicators, language, llm, peer_selection, pipeline, report_blocks, report_export, report_reader, services,  # noqa: E402
                      storage, transcription)
 from backend.config import Settings, get_settings  # noqa: E402
 from backend.errors import ProviderNotConfigured, ServicesNotReady  # noqa: E402
@@ -37,7 +37,8 @@ FEATURES = {
         "Peer selection from supplied candidate data",
         "Demo data and demo stand-ins for each service (step 1; not yet selectable on the website)",
         "Reading PDF, Word, Excel, HTML and text documents with page, section or sheet numbers, and finding the relevant pages (step 2)",
-        "Core indicator calculations with sources, history and peer medians (step 3; v1.0 core set plus ROIC)",
+        "59 indicators from v1.0 sections 5 and 6 with sources, history, peer medians and historical medians; standardised FCF with the reported figure alongside",
+        "Choosing indicators by group or one by one; the report shows only the chosen ones",
         "Demo analysis on the website: company, peers, Agents 1, 2 and 3 with every statement checked, shown as a report (steps 4 and 5a)",
         "Report download as PDF (default) or Word, with the DEMO label on every page of a demo report (step 5b)",
         "folio. website design: sidebar pages for a new analysis, agent workflow, dashboard with five tabs and a chart, sources and transcripts, my reports (in this browser) and services",
@@ -46,9 +47,9 @@ FEATURES = {
         "Provider adapters for the services you choose later (text model, speech-to-text, market data, news)",
         "Finding reports on investor relations sites and regulator fallbacks",
         "Gathering peer candidates automatically",
-        "Choosing the horizon and indicators, and extra questions, in the New analysis form (shown as coming later)",
+        "Bank indicators (v1.0 section 8, part C) and the holding-company module (section 7, part D)",
+        "Choosing the horizon, and extra questions, in the New analysis form (shown as coming later)",
         "Using uploaded files in the analysis; a list of past analyses kept on the server",
-        "The remaining v1.0 indicators",
     ],
 }
 
@@ -65,6 +66,7 @@ class AnalysisRequest(BaseModel):
     output_language: str | None = None
     peers: list[str] = []
     as_of: date | None = None  # analysis date; reports published later are left out
+    indicators: list[str] | None = None  # indicator ids to report; all when left out
 
 
 class PeerRequest(BaseModel):
@@ -120,7 +122,8 @@ def create_app(settings: Settings | None = None, provider_factory=None, run=None
     @app.get("/api/config")
     def config():
         return {**settings.public_view(), "ffmpeg_available": transcription.ffmpeg_available(), "features": FEATURES,
-                "services": services.service_status(settings)}
+                "services": services.service_status(settings),
+                "indicators": [{"id": s.id, "name": s.name, "group": s.group} for s in indicators.SPECS]}
 
     @app.get("/api/services")
     def service_list():
@@ -212,9 +215,15 @@ def create_app(settings: Settings | None = None, provider_factory=None, run=None
 
     @app.post("/api/analyses")
     def start_analysis(req: AnalysisRequest):
+        if req.indicators is not None:
+            if not req.indicators:
+                raise HTTPException(400, "Choose at least one indicator.")
+            unknown = sorted(set(req.indicators) - set(indicators.SPECS_BY_ID))
+            if unknown:
+                raise HTTPException(400, f"Unknown indicators: {', '.join(unknown)}.")
         try:
             target = language.resolve_output_language(req.output_language, settings)
-            state = analyses.create(req.company, req.demo, target, req.peers, req.as_of or date.today())
+            state = analyses.create(req.company, req.demo, target, req.peers, req.as_of or date.today(), req.indicators)
         except language.UnsupportedLanguage as exc:
             raise HTTPException(400, str(exc))
         except pipeline.CompanyNotFound as exc:

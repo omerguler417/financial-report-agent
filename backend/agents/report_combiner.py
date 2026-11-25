@@ -36,13 +36,15 @@ def _missing(agent1: dict, agent2: dict) -> list[str]:
     return items
 
 
-def _limitations(company: dict, demo_label: str | None) -> list[str]:
+def _limitations(company: dict, demo_label: str | None, left_out: list[str] | None = None) -> list[str]:
     items = []
+    if left_out:
+        items.append(f"Indicators left out at your request ({len(left_out)}): {', '.join(left_out)}.")
     if demo_label:
         items.append(f"{demo_label}. The model's answers are recorded, and a few contain deliberate mistakes so the checks can be seen working.")
     items += [
-        "Free cash flow is reported FCF (operating cash flow minus capex); the standardised version needs cash interest and lease "
-        "payments, which are not extracted yet.",
+        "Comparisons use standardised free cash flow (after cash interest and lease repayments), with the reported figure alongside; "
+        "where those adjustments are not in the reports, the reported figure is used and labelled.",
         "Enterprise value uses non-controlling interests at book value.",
         "Multiples at past year ends (historical medians) are not calculated yet; the history covers indicators that need no share price.",
         "Indicator definitions follow docs/indicator_definitions.md v1.0.",
@@ -88,6 +90,6 @@ def run(company: dict, agent1: dict, agent2: dict, services, context: dict) -> d
         "risks": risks,
         "missing_information": _missing(agent1, agent2),
         "unverified_statements": unverified,
-        "limitations": _limitations(company, getattr(services, "label", None)),
+        "limitations": _limitations(company, getattr(services, "label", None), agent1["indicators"].get("left_out")),
         "statement_check": {"checked": total, "verified": total - len(unverified), "unverified": len(unverified)},
     }

@@ -5,7 +5,9 @@
 # the share price (Agent 2), and one overview statement gives a valuation verdict (Agent 3).
 from backend.demo import demo_data as D
 
-UNITS = {"shares_outstanding": "millions of shares", "statutory_tax_rate": "percent"}
+UNITS = {"shares_outstanding": "millions of shares", "statutory_tax_rate": "percent", "weighted_shares_basic": "millions of shares",
+         "weighted_shares_diluted": "millions of shares", "free_float_shares": "millions of shares", "eps_basic": "USD per share",
+         "eps_diluted": "USD per share", "dividends_per_share": "USD per share"}
 
 
 def extract_figures(data: dict) -> dict:
@@ -110,13 +112,16 @@ def combine_report(data: dict) -> dict:
     def page(doc, number):
         return {"doc_id": ids[doc], "page": number}
 
-    overview = [
-        {"text": f"Over the twelve months to September 2026, return on common equity was {found[('roe_common', period)] * 100:.1f}% and net "
-                 f"debt was {found[('net_debt_ebitda', period)]:.2f} times EBITDA.", "citations": [cite("roe_common"), cite("net_debt_ebitda")]},
+    overview = []
+    if found.get(("roe_common", period)) is not None and found.get(("net_debt_ebitda", period)) is not None:
+        overview.append({"text": f"Over the twelve months to September 2026, return on common equity was {found[('roe_common', period)] * 100:.1f}% "
+                                 f"and net debt was {found[('net_debt_ebitda', period)]:.2f} times EBITDA.",
+                         "citations": [cite("roe_common"), cite("net_debt_ebitda")]})
+    overview += [
         {"text": f"Revenue for the first nine months of 2026 was {cur:,.1f} million, compared with {prev:,.1f} million a year earlier; the chief "
                  "executive repeated the nine-month figure on the earnings call.", "citations": [page("quarter", 5), page("call", 1)]},
     ]
-    if ("pe", "peer median") in found:
+    if found.get(("pe", period)) is not None and found.get(("pe", "peer median")) is not None:
         overview.append({"text": f"The P/E of {found[('pe', period)]:.2f}x is above the median of {found[('pe', 'peer median')]:.2f}x for the "
                                  "selected peers.", "citations": [cite("pe"), cite("pe", "peer median")]})
         # deliberate mistake: a valuation verdict

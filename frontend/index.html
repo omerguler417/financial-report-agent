@@ -60,15 +60,9 @@
                 </label>
               </div>
               <fieldset class="field">
-                <legend class="label">Indicators <em class="soon">Coming later</em></legend>
-                <div class="checks">
-                  <label class="check"><input type="checkbox" name="indicator-group" checked disabled> Valuation</label>
-                  <label class="check"><input type="checkbox" name="indicator-group" checked disabled> Debt and liquidity</label>
-                  <label class="check"><input type="checkbox" name="indicator-group" checked disabled> Profitability</label>
-                  <label class="check"><input type="checkbox" name="indicator-group" checked disabled> Growth and cash</label>
-                  <label class="check"><input type="checkbox" name="indicator-group" checked disabled> Per share</label>
-                </div>
-                <p class="hint">Every analysis calculates all core indicators of definitions v1.0; choosing them comes later.</p>
+                <legend class="label">Indicators <span class="optional" id="indicator-count"></span></legend>
+                <div class="indicator-picker" id="indicator-picker"><p class="empty">Loading the indicator list…</p></div>
+                <p class="hint">All are ticked. Untick a group, or open it to untick single indicators. Definitions follow v1.0; the report shows only your choice.</p>
               </fieldset>
               <label class="field">
                 <span class="label">Peers <em class="optional">optional</em></span>

@@ -9,7 +9,10 @@ from typing import Callable
 DEFINITION_VERSION = "v1.0"
 STATUSES = ("calculated", "reported_only", "estimated", "missing", "not_applicable", "not_meaningful", "not_comparable")  # v1.0 section 3
 FLOW_FIELDS = {"revenue", "ebit", "depreciation_amortisation", "interest_expense", "pretax_income", "income_tax", "net_income_group",
-               "nci_share_of_income", "net_income_common", "cfo_reported", "capex", "dividends_paid_common"}
+               "nci_share_of_income", "net_income_common", "cfo_reported", "capex", "dividends_paid_common", "cost_of_sales",
+               "interest_paid_in_cfo", "interest_paid_outside_cfo", "lease_principal_outside_cfo", "dividends_paid_in_cfo", "dividends_per_share"}
+# Reported for each period but never added up into twelve months (v1.0: no blind adding of per-share figures on different share bases).
+PERIOD_ONLY_FIELDS = {"eps_basic", "eps_diluted", "weighted_shares_basic", "weighted_shares_diluted"}
 RATE_FIELDS = {"statutory_tax_rate"}
 FINANCIAL_MODELS = {"bank", "insurer"}
 
@@ -23,6 +26,7 @@ class Figure:
     period: str
     sources: list = field(default_factory=list)
     note: str = ""
+    alternative: "Figure | None" = None  # the reported-basis figure kept alongside a standardised one
 
     def as_input(self) -> dict:
         out = {"name": self.name, "value": self.value, "unit": self.unit, "period": self.period, "sources": self.sources}
@@ -40,6 +44,7 @@ class CompanyInputs:
     price: Figure | None = None
     business_model: str = "operating"  # operating | bank | insurer
     demo_label: str | None = None
+    price_points: dict = field(default_factory=dict)  # "end", "1m", "3m", "12m" (split-adjusted) and "year end YYYY-12-31" closes
 
 
 @dataclass
@@ -106,10 +111,13 @@ def fiscal_year(label: str) -> int | None:
 class _View:
     """One column of the analysis: the current (TTM) column or one fiscal year."""
 
-    def __init__(self, label, flows, closing, closing_label, opening, opening_label, growth=None, price=None, tax_rate=None, annual=None):
+    def __init__(self, label, flows, closing, closing_label, opening, opening_label, growth=None, price=None, tax_rate=None, annual=None,
+                 prior_flows=None, price_points=None):
         self.label, self.flows, self.closing, self.closing_label = label, flows, closing, closing_label
         self.opening, self.opening_label, self.growth, self.price, self.tax_rate = opening, opening_label, growth, price, tax_rate
         self.annual = annual or []  # [(fiscal year, view)] for multi-year measures
+        self.prior_flows = prior_flows or {}  # the previous fiscal year's flows, for year-on-year measures in the history
+        self.price_points = price_points or {}
         self.not_comparable: dict = {}  # flows whose parts could not be combined, with the reason
 
     def flow(self, name: str) -> Figure:
@@ -134,9 +142,56 @@ def _ebitda(v: _View) -> Figure:
     return _sum("ebitda", v.label, [(1, v.flow("ebit")), (1, v.flow("depreciation_amortisation"))], "EBIT + depreciation and amortisation")
 
 
+def _cfo_standardised(v: _View) -> Figure:
+    """v1.0: CFO after cash interest and lease principal; dividends paid inside CFO are added back. Missing classification stops it."""
+    terms, notes = [(1, v.flow("cfo_reported"))], []
+    if "interest_paid_outside_cfo" in v.flows:
+        terms.append((-1, v.flows["interest_paid_outside_cfo"]))
+    elif "interest_paid_in_cfo" in v.flows:
+        notes.append("Interest paid is already within operating cash flow.")
+    else:
+        raise _Stop("missing", "where interest paid is classified")
+    leases = v.closing.get("lease_liabilities")
+    if "lease_principal_outside_cfo" in v.flows:
+        terms.append((-1, v.flows["lease_principal_outside_cfo"]))
+    elif not (leases is not None and leases.value == 0):
+        raise _Stop("missing", "the lease principal payments")
+    if "dividends_paid_in_cfo" in v.flows:
+        terms.append((1, v.flows["dividends_paid_in_cfo"]))
+    return _sum("cfo_standardised", v.label, terms, " ".join(["Standardised CFO: after cash interest and lease principal."] + notes))
+
+
+def _cfo(v: _View) -> Figure:
+    """Standardised CFO for comparisons with the reported figure alongside; the reported figure, labelled, when adjustments are missing."""
+    reported = v.flow("cfo_reported")
+    try:
+        standardised = _cfo_standardised(v)
+    except _Stop as stop:
+        if stop.status != "missing":
+            raise
+        return Figure(reported.name, reported.value, reported.unit, reported.period, reported.sources,
+                      f"Reported basis: the standardised figure needs {stop.note}, which is not in the inputs.")
+    standardised.alternative = reported
+    return standardised
+
+
 def _fcf(v: _View) -> Figure:
-    return _sum("fcf_reported", v.label, [(1, v.flow("cfo_reported")), (-1, v.flow("capex"))],
-                "Reported FCF = CFO − capex. Standardised FCF needs cash interest and lease-principal inputs, which are not extracted yet.")
+    capex = v.flow("capex")
+    cfo = _cfo(v)
+    reported = _sum("fcf_reported", v.label, [(1, v.flow("cfo_reported")), (-1, capex)], "Reported FCF = reported CFO − capex.")
+    if cfo.alternative is None:
+        reported.note = cfo.note.replace("Reported basis:", "Reported basis (CFO − capex):")
+        return reported
+    standardised = _sum("fcf_standardised", v.label, [(1, cfo), (-1, capex)], "Standardised FCF = standardised CFO − capex.")
+    standardised.alternative = reported
+    return standardised
+
+
+def _reported_view(numerator_alt, denominator_alt) -> dict:
+    """The same ratio on the reported basis, shown alongside (only when it is defined)."""
+    if numerator_alt is None or denominator_alt is None or denominator_alt.value <= 0:
+        return {}
+    return {"reported_basis": numerator_alt.value / denominator_alt.value}
 
 
 def _debt(v: _View, opening: bool = False) -> Figure:
@@ -216,9 +271,15 @@ def _nci_scope_note(v) -> str:
             if nci and nci.value else "")
 
 
+def _fcf_note(v, fcf, scope=True):
+    basis = "Standardised FCF; the reported basis is shown alongside." if fcf.alternative else fcf.note
+    return " ".join(n for n in (basis, _nci_scope_note(v) if scope else "") if n)
+
+
 def _p_fcf(v):
     mc, fcf = _market_cap(v), _fcf(v)
-    return _ratio(mc, fcf, "FCF is zero or negative, so P/FCF is NM; FCF yield still shows it."), [mc, fcf], _nci_scope_note(v)
+    value = _ratio(mc, fcf, "FCF is zero or negative, so P/FCF is NM; FCF yield still shows it.")
+    return value, [mc, fcf], _fcf_note(v, fcf), _reported_view(mc, fcf.alternative)
 
 
 def _ev_ebitda(v):
@@ -231,7 +292,8 @@ def _ev_ebitda(v):
 
 def _fcf_yield(v):
     fcf, mc = _fcf(v), _market_cap(v)
-    return _ratio(fcf, mc, "Market value is not positive, so FCF yield is NM."), [fcf, mc], _nci_scope_note(v)
+    value = _ratio(fcf, mc, "Market value is not positive, so FCF yield is NM.")
+    return value, [fcf, mc], _fcf_note(v, fcf), _reported_view(fcf.alternative, mc)
 
 
 def _debt_equity(v):
@@ -315,7 +377,8 @@ def _revenue_growth(v):
 
 def _fcf_conversion(v):
     fcf, ni = _fcf(v), v.flow("net_income_group")
-    return _ratio(fcf, ni, "Group net income is not positive, so FCF conversion is NM."), [fcf, ni], ""
+    value = _ratio(fcf, ni, "Group net income is not positive, so FCF conversion is NM.")
+    return value, [fcf, ni], _fcf_note(v, fcf, scope=False), _reported_view(fcf.alternative, ni)
 
 
 def _fcf_conversion_multi_year(v):
@@ -332,7 +395,7 @@ def _fcf_conversion_multi_year(v):
     if len(years) < 2:
         raise _Stop("missing", "Fewer than two consecutive fiscal years have complete FCF and net income data.")
     years.reverse()
-    total_fcf = _sum("fcf_reported_total", "", [(1, f) for _, f, _ in years])
+    total_fcf = _sum("fcf_total", "", [(1, f) for _, f, _ in years])
     total_ni = _sum("net_income_group_total", "", [(1, n) for _, _, n in years])
     period = f"{years[0][0]}–{years[-1][0]}"
     total_fcf.period = total_ni.period = period
@@ -340,7 +403,11 @@ def _fcf_conversion_multi_year(v):
     note = f"Sum of FCF ÷ sum of group net income over {len(years)} years."
     if len(years) < 5:
         note += f" Only {len(years)} years are available, so this is a {len(years)}-year measure, not five."
-    return value, [total_fcf, total_ni], note, {}, False, period
+    views = {}
+    if all(f.alternative for _, f, _ in years):
+        views = {"reported_basis": sum(f.alternative.value for _, f, _ in years) / total_ni.value}
+        note += " Standardised FCF; the reported basis is shown alongside."
+    return value, [total_fcf, total_ni], note, views, False, period
 
 
 def _bvps(v):
@@ -349,6 +416,217 @@ def _bvps(v):
         raise _Stop("not_comparable", f"Equity ({eq.unit}) and share count ({shares.unit}) use different scales.", [eq, shares])
     value = _ratio(eq, shares, "Share count is not positive, so BVPS is not calculated.", same_unit=False)
     return value, [eq, shares], "Uses balance-sheet-date shares, not weighted-average shares."
+
+
+# ---------- section 5 (rest) and section 6 ----------
+
+def _ev_sales(v):
+    ev, rev = _enterprise_value(v), v.flow("revenue")
+    return _ratio(ev, rev, "Revenue is not positive, so EV/sales is NM."), [ev, rev], ""
+
+
+def _ev_ebit(v):
+    ev, ebit = _enterprise_value(v), v.flow("ebit")
+    return _ratio(ev, ebit, "EBIT is zero or negative, so EV/EBIT is NM."), [ev, ebit], "Keeps depreciation as a cost."
+
+
+def _dividend_yield(v):
+    dps = v.flow("dividends_per_share")
+    if v.price is None:
+        raise _Stop("missing", "Missing input: share price. Missing is not treated as zero.", [dps])
+    value = _ratio(dps, v.price, "The share price is not positive.")
+    return value, [dps, v.price], ("Dividends per share paid over the period ÷ the share price. Per-share amounts are combined across "
+                                   "reports, which holds only if there was no share split in the period. Forward dividends are a separate measure.")
+
+
+def _graham(v):
+    mc, ni, eq = _market_cap(v), v.flow("net_income_common"), v.bal("equity_common")
+    pe = _ratio(mc, ni, "Earnings are not positive, so the Graham multiple is NM.")
+    pb = _ratio(mc, eq, "Common equity is not positive, so the Graham multiple is NM.")
+    if pe <= 0:
+        raise _Stop("not_meaningful", "Earnings are not positive, so the Graham multiple is NM.", [mc, ni, eq])
+    return pe * pb, [mc, ni, eq], "P/E × P/B. The 22.5 threshold from the literature is not a universal rule."
+
+
+def _asset_turnover(v):
+    rev, assets = v.flow("revenue"), _average(v, "assets_total")
+    return _ratio(rev, assets, "Average total assets are not positive."), [rev, assets], ""
+
+
+def _dupont_leverage(v):
+    assets, equity = _average(v, "assets_total"), _average(v, "equity_total")
+    return _ratio(assets, equity, "Average total equity is not positive, so leverage is NM."), [assets, equity], "Consolidated scope."
+
+
+def _dupont_parts(v):
+    ni, rev, assets = v.flow("net_income_group"), v.flow("revenue"), _average(v, "assets_total")
+    return ni, rev, assets, _ratio(ni, rev, "Revenue is not positive."), _ratio(rev, assets, "Average total assets are not positive.")
+
+
+def _dupont_margin_turnover(v):
+    ni, rev, assets, margin, turnover = _dupont_parts(v)
+    return margin * turnover, [ni, rev, assets], ("Group net margin × asset turnover; equals group ROA. It is after financing costs, "
+                                                  "not an unlevered return.")
+
+
+def _dupont_roe(v):
+    ni, rev, assets, margin, turnover = _dupont_parts(v)
+    equity = _average(v, "equity_total")
+    leverage = _ratio(assets, equity, "Average total equity is not positive, so DuPont ROE is NM.")
+    return margin * turnover * leverage, [ni, rev, assets, equity], ("Net margin × asset turnover × leverage; equals group net income ÷ "
+                                                                     "average total equity. Not the same as common ROE when NCI matters.")
+
+
+def _gross_margin(v):
+    rev, cos = v.flow("revenue"), v.flow("cost_of_sales")
+    gross = _sum("gross_profit", v.label, [(1, rev), (-1, cos)])
+    return _ratio(gross, rev, "Revenue is not positive, so the margin is NM."), [rev, cos], ""
+
+
+def _ebit_margin(v):
+    ebit, rev = v.flow("ebit"), v.flow("revenue")
+    return _ratio(ebit, rev, "Revenue is not positive, so the margin is NM."), [ebit, rev], ""
+
+
+def _cfo_note(cfo):
+    return "Standardised CFO; the reported basis is shown alongside." if cfo.alternative else cfo.note
+
+
+def _cfo_margin(v):
+    cfo, rev = _cfo(v), v.flow("revenue")
+    return _ratio(cfo, rev, "Revenue is not positive, so the margin is NM."), [cfo, rev], _cfo_note(cfo), _reported_view(cfo.alternative, rev)
+
+
+def _fcf_margin(v):
+    fcf, rev = _fcf(v), v.flow("revenue")
+    value = _ratio(fcf, rev, "Revenue is not positive, so the margin is NM.")
+    return value, [fcf, rev], _fcf_note(v, fcf, scope=False), _reported_view(fcf.alternative, rev)
+
+
+def _cfo_conversion(v):
+    cfo, ni = _cfo(v), v.flow("net_income_group")
+    value = _ratio(cfo, ni, "Group net income is not positive, so CFO conversion is NM.")
+    return value, [cfo, ni], _cfo_note(cfo), _reported_view(cfo.alternative, ni)
+
+
+def _accrual_ratio(v):
+    ni, cfo, assets = v.flow("net_income_group"), _cfo(v), _average(v, "assets_total")
+    accruals = _sum("accruals", v.label, [(1, ni), (-1, cfo)], "Group net income − CFO.")
+    value = _ratio(accruals, assets, "Average total assets are not positive.")
+    views = {"reported_basis": (ni.value - cfo.alternative.value) / assets.value} if cfo.alternative is not None else {}
+    return value, [ni, cfo, assets], "Shows how far earnings and cash differ; on its own it is not evidence of manipulation.", views
+
+
+def _capex_intensity(v):
+    capex, rev = v.flow("capex"), v.flow("revenue")
+    return _ratio(capex, rev, "Revenue is not positive."), [capex, rev], ""
+
+
+def _quick_ratio(v):
+    quick = _sum("quick_assets", v.closing_label, [(1, v.bal("cash_eligible")), (1, v.bal("short_term_investments")),
+                                                   (1, v.bal("trade_receivables"))])
+    cl = v.bal("current_liabilities")
+    return _ratio(quick, cl, "Current liabilities are zero."), [quick, cl], ("Excludes inventory and prepayments; short-term investments "
+                                                                            "are taken as reported liquid.")
+
+
+def _cash_ratio(v):
+    cash = _sum("cash_and_investments", v.closing_label, [(1, v.bal("cash_eligible")), (1, v.bal("short_term_investments"))])
+    cl = v.bal("current_liabilities")
+    return _ratio(cash, cl, "Current liabilities are zero."), [cash, cl], ""
+
+
+def _gross_debt_ebitda(v):
+    debt, ebitda = _debt(v), _ebitda(v)
+    return _ratio(debt, ebitda, "EBITDA is zero or negative, so the ratio is NM."), [debt, ebitda], "Gross borrowing including leases."
+
+
+def _payout_ratio(v):
+    div, ni = v.flow("dividends_paid_common"), v.flow("net_income_common")
+    return _ratio(div, ni, "Earnings attributable to common shareholders are not positive, so the payout ratio is NM."), [div, ni], ""
+
+
+def _fcf_dividend_coverage(v):
+    fcf, div = _fcf(v), v.flow("dividends_paid_common")
+    value = _ratio(fcf, div, "No common dividends were paid, so coverage is not calculated.")
+    return value, [fcf, div], _fcf_note(v, fcf), _reported_view(fcf.alternative, div)
+
+
+def _nwc_sales(v):
+    nwc = _sum("operating_nwc", v.closing_label, [(1, v.bal("trade_receivables")), (1, v.bal("inventories")), (-1, v.bal("trade_payables"))],
+               "Approximation: receivables + inventories − payables; other operating items are not separated.")
+    rev = v.flow("revenue")
+    return _ratio(nwc, rev, "Revenue is not positive."), [nwc, rev], nwc.note + " A negative value can be structural."
+
+
+def _free_float(v):
+    free, shares = v.bal("free_float_shares"), v.bal("shares_outstanding")
+    value = _ratio(free, shares, "Shares outstanding are not positive.")
+    return value, [free, shares], "Definitions of free float differ by market; it does not change market capitalisation."
+
+
+def _reported(field_name, label):
+    def fn(v):
+        source = v.annual[-1][1] if v.annual else v
+        f = source.flows.get(field_name)
+        if f is None:
+            raise _Stop("missing", f"Missing input: {label} for {source.label}. Missing is not treated as zero.")
+        note = "As reported."
+        if v.annual:
+            note += " Latest fiscal year: a twelve-month figure would need quarterly EPS on the same share basis."
+        return {"value": f.value, "inputs": [f], "note": note, "period": f.period, "status": "reported_only"}
+    return fn
+
+
+def _eps_growth(v):
+    if v.annual:
+        (fy, view), prev = v.annual[-1], (v.annual[-2] if len(v.annual) > 1 else None)
+        cur = view.flows.get("eps_diluted")
+        prior = prev[1].flows.get("eps_diluted") if prev and fiscal_year(prev[0]) == fiscal_year(fy) - 1 else None
+    else:
+        cur, prior = v.flows.get("eps_diluted"), v.prior_flows.get("eps_diluted")
+    if cur is None or prior is None:
+        raise _Stop("missing", "Reported diluted EPS for two consecutive fiscal years is needed.")
+    _check_units(cur, prior)
+    if cur.value <= 0 or prior.value <= 0:
+        raise _Stop("not_meaningful", "EPS is not positive in both years; a move between loss and profit is described, not given as a "
+                                      "percentage.", [cur, prior])
+    return {"value": cur.value / prior.value - 1, "inputs": [cur, prior], "period": f"{cur.period} vs {prior.period}",
+            "note": f"Reported diluted EPS, {cur.period} compared with {prior.period}."}
+
+
+def _revenue_cagr(v):
+    years = []
+    for label, view in reversed(v.annual[-6:]):
+        f = view.flows.get("revenue")
+        if f is None or (years and fiscal_year(years[-1][0]) - 1 != fiscal_year(label)):
+            break
+        years.append((label, f))
+    if len(years) < 2:
+        raise _Stop("missing", "Fewer than two consecutive fiscal years of revenue are available.")
+    years.reverse()
+    (first, begin), (last, end) = years[0], years[-1]
+    n = len(years) - 1
+    _check_units(begin, end)
+    if begin.value <= 0 or end.value <= 0:
+        raise _Stop("not_meaningful", "Revenue is not positive at the start or the end, so a growth rate is NM.", [begin, end])
+    note = f"{n}-year CAGR from {first} to {last}."
+    if n < 5:
+        note += " A five-year CAGR needs six annual observations."
+    return {"value": (end.value / begin.value) ** (1 / n) - 1, "inputs": [begin, end], "note": note, "period": f"{first}–{last}"}
+
+
+def _price_return(key, words):
+    def fn(v):
+        end, begin = v.price_points.get("end"), v.price_points.get(key)
+        if end is None or begin is None:
+            raise _Stop("missing", f"A split-adjusted closing price from {words} ago is not available.")
+        _check_units(begin, end)
+        if begin.value <= 0:
+            raise _Stop("not_meaningful", "The starting price is not positive.", [begin, end])
+        return {"value": end.value / begin.value - 1, "inputs": [begin, end], "period": f"{begin.period} to {end.period}",
+                "note": "Split-adjusted closes, without dividends. A price move does not by itself show its cause."}
+    return fn
 
 
 @dataclass(frozen=True)
@@ -363,20 +641,45 @@ class Spec:
     not_for_financials: bool = False
     peer_comparison: str = "median only"  # "peer discount", "percentage points", "median only" or "none"
     multi_year: bool = False
+    historical: bool = False  # median at past fiscal year ends, or the current value against it
 
+
+HISTORICAL = ["pe", "ps", "pb", "ev_ebitda", "p_fcf"]
+
+HIST_NAMES = {"pe": "P/E", "ps": "P/S", "pb": "P/B", "ev_ebitda": "EV/EBITDA", "p_fcf": "P/FCF"}
+HIST_FORMULA = "median of the multiple at the preceding five fiscal year ends, each from the price and the reports published by that date"
 
 SPECS = [
+    # Valuation
     Spec("pe", "P/E", "Valuation", "x", "market_cap / net_income_common (TTM)", _pe, True, peer_comparison="peer discount"),
     Spec("ps", "P/S", "Valuation", "x", "market_cap / revenue (TTM)", _ps, True, peer_comparison="peer discount"),
     Spec("pb", "P/B", "Valuation", "x", "market_cap / equity_common", _pb, True, peer_comparison="peer discount"),
-    Spec("p_fcf", "P/FCF", "Valuation", "x", "market_cap / fcf_reported (TTM)", _p_fcf, True, True, "peer discount"),
+    Spec("p_fcf", "P/FCF", "Valuation", "x", "market_cap / standardised FCF (TTM); reported basis alongside", _p_fcf, True, True, "peer discount"),
     Spec("ev_ebitda", "EV/EBITDA", "Valuation", "x", "enterprise_value / ebitda (TTM)", _ev_ebitda, True, True, "peer discount"),
-    Spec("fcf_yield", "FCF yield", "Valuation", "fraction", "fcf_reported (TTM) / market_cap", _fcf_yield, True, True),
+    Spec("ev_sales", "EV/sales", "Valuation", "x", "enterprise_value / revenue (TTM)", _ev_sales, True, True, "peer discount"),
+    Spec("ev_ebit", "EV/EBIT", "Valuation", "x", "enterprise_value / ebit (TTM)", _ev_ebit, True, True, "peer discount"),
+    Spec("fcf_yield", "FCF yield", "Valuation", "fraction", "standardised FCF (TTM) / market_cap; reported basis alongside", _fcf_yield, True, True),
+    Spec("dividend_yield", "Dividend yield", "Valuation", "fraction", "dividends per share paid (TTM) / share price", _dividend_yield, True),
+    Spec("graham", "Graham multiple", "Valuation", "x", "P/E × P/B", _graham, True),
+    # Historical comparison (calculated in _historical)
+    *[s for base, name in HIST_NAMES.items() for s in (
+        Spec(f"{base}_hist_median", f"{name} historical median", "Historical comparison", "x", HIST_FORMULA, None, True,
+             base in ("ev_ebitda", "p_fcf"), "none", historical=True),
+        Spec(f"{base}_vs_hist", f"{name} against its historical median", "Historical comparison", "fraction",
+             f"current {name} / historical median − 1", None, True, base in ("ev_ebitda", "p_fcf"), "none", historical=True))],
+    # Debt and liquidity
     Spec("debt_equity", "Debt/equity", "Debt and liquidity", "x", "debt_inc_leases / equity_total", _debt_equity, not_for_financials=True),
     Spec("net_debt_equity", "Net debt/equity", "Debt and liquidity", "x", "net_debt / equity_total", _net_debt_equity, not_for_financials=True),
     Spec("net_debt_ebitda", "Net debt/EBITDA", "Debt and liquidity", "x", "net_debt / ebitda (TTM)", _net_debt_ebitda, not_for_financials=True),
+    Spec("gross_debt_ebitda", "Gross debt/EBITDA", "Debt and liquidity", "x", "debt_inc_leases / ebitda (TTM)", _gross_debt_ebitda,
+         not_for_financials=True),
     Spec("current_ratio", "Current ratio", "Debt and liquidity", "x", "current_assets / current_liabilities", _current_ratio, not_for_financials=True),
+    Spec("quick_ratio", "Quick ratio", "Debt and liquidity", "x", "(cash + short-term investments + trade receivables) / current_liabilities",
+         _quick_ratio, not_for_financials=True),
+    Spec("cash_ratio", "Cash ratio", "Debt and liquidity", "x", "(cash + short-term investments) / current_liabilities", _cash_ratio,
+         not_for_financials=True),
     Spec("interest_coverage", "Interest coverage", "Debt and liquidity", "x", "ebit / interest_expense (TTM)", _interest_coverage, not_for_financials=True),
+    # Profitability
     Spec("roe_common", "Common ROE", "Profitability", "fraction", "net_income_common / average equity_common", _roe,
          peer_comparison="percentage points"),
     Spec("roa_group", "Group ROA", "Profitability", "fraction", "net_income_group / average assets_total", _roa, peer_comparison="percentage points"),
@@ -385,14 +688,52 @@ SPECS = [
     Spec("net_margin", "Net profit margin", "Profitability", "fraction", "net_income_group / revenue", _net_margin, peer_comparison="percentage points"),
     Spec("ebitda_margin", "EBITDA margin", "Profitability", "fraction", "ebitda / revenue", _ebitda_margin, not_for_financials=True,
          peer_comparison="percentage points"),
-    Spec("revenue_growth", "Revenue growth", "Growth and cash", "fraction", "current comparable-period revenue / prior comparable-period revenue − 1",
-         _revenue_growth),
-    Spec("fcf_conversion", "FCF earnings conversion", "Growth and cash", "fraction", "fcf_reported / net_income_group", _fcf_conversion,
+    Spec("ebit_margin", "EBIT margin", "Profitability", "fraction", "ebit / revenue", _ebit_margin, not_for_financials=True,
+         peer_comparison="percentage points"),
+    Spec("gross_margin", "Gross margin", "Profitability", "fraction", "(revenue − cost_of_sales) / revenue", _gross_margin, not_for_financials=True,
+         peer_comparison="percentage points"),
+    Spec("asset_turnover", "Asset turnover", "Profitability", "x", "revenue / average assets_total", _asset_turnover),
+    Spec("dupont_leverage", "DuPont financial leverage", "Profitability", "x", "average assets_total / average equity_total", _dupont_leverage),
+    Spec("dupont_margin_turnover", "DuPont margin × turnover", "Profitability", "fraction", "group net margin × asset turnover",
+         _dupont_margin_turnover),
+    Spec("dupont_roe", "Group DuPont ROE", "Profitability", "fraction", "group net margin × asset turnover × DuPont financial leverage", _dupont_roe),
+    # Cash flow and dividends
+    Spec("fcf_conversion", "FCF earnings conversion", "Cash flow and dividends", "fraction", "standardised FCF / net_income_group", _fcf_conversion,
          not_for_financials=True),
-    Spec("fcf_conversion_5y", "Five-year FCF earnings conversion", "Growth and cash", "fraction",
-         "sum of fcf_reported / sum of net_income_group over the same fiscal years", _fcf_conversion_multi_year, not_for_financials=True,
+    Spec("fcf_conversion_5y", "Five-year FCF earnings conversion", "Cash flow and dividends", "fraction",
+         "sum of standardised FCF / sum of net_income_group over the same fiscal years", _fcf_conversion_multi_year, not_for_financials=True,
          multi_year=True),
-    Spec("bvps", "Book value per share", "Per share", "per share", "equity_common / shares_outstanding", _bvps, peer_comparison="none"),
+    Spec("cfo_conversion", "CFO earnings conversion", "Cash flow and dividends", "fraction", "standardised CFO / net_income_group",
+         _cfo_conversion, not_for_financials=True),
+    Spec("cfo_margin", "CFO margin", "Cash flow and dividends", "fraction", "standardised CFO / revenue", _cfo_margin, not_for_financials=True,
+         peer_comparison="percentage points"),
+    Spec("fcf_margin", "FCF margin", "Cash flow and dividends", "fraction", "standardised FCF / revenue", _fcf_margin, not_for_financials=True,
+         peer_comparison="percentage points"),
+    Spec("capex_intensity", "Capex intensity", "Cash flow and dividends", "fraction", "capex / revenue", _capex_intensity),
+    Spec("accrual_ratio", "Accrual ratio", "Cash flow and dividends", "fraction", "(net_income_group − standardised CFO) / average assets_total",
+         _accrual_ratio, not_for_financials=True),
+    Spec("nwc_sales", "Operating NWC/sales", "Cash flow and dividends", "fraction", "operating NWC / revenue", _nwc_sales, not_for_financials=True),
+    Spec("payout_ratio", "Dividend payout ratio", "Cash flow and dividends", "fraction", "dividends_paid_common / net_income_common", _payout_ratio),
+    Spec("fcf_dividend_coverage", "FCF dividend coverage", "Cash flow and dividends", "x", "standardised FCF / dividends_paid_common",
+         _fcf_dividend_coverage, not_for_financials=True),
+    # Growth
+    Spec("revenue_growth", "Revenue growth", "Growth", "fraction", "current comparable-period revenue / prior comparable-period revenue − 1",
+         _revenue_growth),
+    Spec("revenue_cagr", "Revenue CAGR", "Growth", "fraction", "(ending annual revenue / beginning annual revenue)^(1/n) − 1", _revenue_cagr,
+         multi_year=True),
+    Spec("eps_growth", "Diluted EPS growth", "Growth", "fraction", "reported diluted EPS / prior-year reported diluted EPS − 1", _eps_growth),
+    # Per share and market
+    Spec("bvps", "Book value per share", "Per share and market", "per share", "equity_common / shares_outstanding", _bvps, peer_comparison="none"),
+    Spec("eps_basic", "Basic EPS", "Per share and market", "per share", "as reported", _reported("eps_basic", "basic EPS"), peer_comparison="none"),
+    Spec("eps_diluted", "Diluted EPS", "Per share and market", "per share", "as reported", _reported("eps_diluted", "diluted EPS"),
+         peer_comparison="none"),
+    Spec("free_float", "Free-float percentage", "Per share and market", "fraction", "free_float_shares / shares_outstanding", _free_float),
+    Spec("price_return_1m", "Price return, 1 month", "Per share and market", "fraction", "split-adjusted end price / price 1 month earlier − 1",
+         _price_return("1m", "one month"), True),
+    Spec("price_return_3m", "Price return, 3 months", "Per share and market", "fraction", "split-adjusted end price / price 3 months earlier − 1",
+         _price_return("3m", "three months"), True),
+    Spec("price_return_12m", "Price return, 12 months", "Per share and market", "fraction",
+         "split-adjusted end price / price 12 months earlier − 1", _price_return("12m", "twelve months"), True),
 ]
 SPECS_BY_ID = {s.id: s for s in SPECS}
 
@@ -406,9 +747,13 @@ def _run(spec: Spec, v: _View, business_model: str) -> Result:
         return Result(spec.id, spec.name, v.label, "not_applicable", None, unit, spec.formula,
                       note=f"Not applicable to a {business_model}: funding is part of the business model (v1.0 section 8).")
     try:
-        value, inputs, note, *rest = spec.fn(v)
+        out = spec.fn(v)
     except _Stop as stop:
         return Result(spec.id, spec.name, v.label, stop.status, None, unit, spec.formula, [f.as_input() for f in stop.inputs], stop.note)
+    if isinstance(out, dict):  # reported figures and measures with their own period
+        return Result(spec.id, spec.name, out.get("period", v.label), out.get("status", "calculated"), out["value"], unit, spec.formula,
+                      [f.as_input() for f in out["inputs"]], out.get("note", ""), out.get("views", {}))
+    value, inputs, note, *rest = out
     other_views = rest[0] if rest else {}
     exclude = rest[1] if len(rest) > 1 else False
     period = rest[2] if len(rest) > 2 else v.label
@@ -418,8 +763,9 @@ def _run(spec: Spec, v: _View, business_model: str) -> Result:
 # ---------- the analysis ----------
 
 def _split(figures: dict) -> tuple[dict, dict]:
-    flows = {k: f for k, f in figures.items() if k in FLOW_FIELDS}
-    balances = {k: f for k, f in figures.items() if k not in FLOW_FIELDS and k not in RATE_FIELDS}
+    period_fields = FLOW_FIELDS | PERIOD_ONLY_FIELDS
+    flows = {k: f for k, f in figures.items() if k in period_fields}
+    balances = {k: f for k, f in figures.items() if k not in period_fields and k not in RATE_FIELDS}
     return flows, balances
 
 
@@ -435,47 +781,140 @@ def _annual_views(c: CompanyInputs) -> list:
             growth = (flows["revenue"], c.periods[prev]["revenue"])
         views.append((fy, _View(fy, flows, closing, f"{fy} year end", opening,
                                 f"{prev} year end" if prev else f"FY{fiscal_year(fy) - 1} year end", growth,
-                                tax_rate=c.periods[fy].get("statutory_tax_rate"))))
+                                tax_rate=c.periods[fy].get("statutory_tax_rate"),
+                                prior_flows=_split(c.periods[prev])[0] if prev else None)))
     return views
 
 
-def _current_view(c: CompanyInputs, annual: list) -> _View:
-    fy = c.periods[c.latest_fy]
-    tax_rate = fy.get("statutory_tax_rate")
-    if c.ytd_current and c.ytd_prior and c.ytd_current in c.periods:
-        cur, prior = c.periods[c.ytd_current], c.periods.get(c.ytd_prior, {})
-        label = f"TTM to {c.ytd_current.removeprefix('YTD').strip()}"
-        flows, not_comparable = {}, {}
-        for name in FLOW_FIELDS:
-            if name in fy and name in cur and name in prior:
-                try:
-                    flows[name] = _ttm(fy[name], cur[name], prior[name], label)
-                except _Stop as stop:
-                    not_comparable[name] = stop
-        closing, opening = _split(cur)[1], _split(prior)[1] or None
-        growth = (cur["revenue"], prior["revenue"]) if "revenue" in cur and "revenue" in prior else None
-        view = _View(label, flows, closing, f"{c.ytd_current} period end", opening, f"{c.ytd_prior} period end", growth, c.price,
-                     tax_rate, annual)
-        view.not_comparable = not_comparable
-        return view
-    view = dict(annual)[c.latest_fy]
-    view.price, view.annual = c.price, annual
+def _published_by(f: Figure, day: str | None) -> Figure | None:
+    """The figure as known on `day`: only sources published by then. None when every dated source came later."""
+    if day is None:
+        return f
+    dated = [src for src in f.sources if src.get("published")]
+    if not dated:
+        return f
+    known = [src for src in f.sources if not src.get("published") or src["published"] <= day]
+    if not any(src.get("published") for src in known):
+        return None
+    return Figure(f.name, f.value, f.unit, f.period, known, f.note)
+
+
+def _ttm_view(c: CompanyInputs, fy_label: str, cur_label: str, prior_label: str, price, label: str, annual=None, known_by=None,
+              price_points=None) -> _View:
+    def known(period):
+        figures = {k: _published_by(f, known_by) for k, f in c.periods.get(period, {}).items()}
+        return {k: f for k, f in figures.items() if f is not None}
+    fy, cur, prior = known(fy_label), known(cur_label), known(prior_label)
+    flows, not_comparable = {}, {}
+    for name in FLOW_FIELDS:
+        if name in fy and name in cur and name in prior:
+            try:
+                flows[name] = _ttm(fy[name], cur[name], prior[name], label)
+            except _Stop as stop:
+                not_comparable[name] = stop
+    closing, opening = _split(cur)[1], _split(prior)[1] or None
+    growth = (cur["revenue"], prior["revenue"]) if "revenue" in cur and "revenue" in prior else None
+    view = _View(label, flows, closing, f"{cur_label} period end", opening, f"{prior_label} period end", growth, price,
+                 fy.get("statutory_tax_rate"), annual, price_points=price_points)
+    view.not_comparable = not_comparable
     return view
 
 
+def _current_view(c: CompanyInputs, annual: list) -> _View:
+    if c.ytd_current and c.ytd_prior and c.ytd_current in c.periods:
+        label = f"TTM to {c.ytd_current.removeprefix('YTD').strip()}"
+        return _ttm_view(c, c.latest_fy, c.ytd_current, c.ytd_prior, c.price, label, annual, price_points=c.price_points)
+    view = dict(annual)[c.latest_fy]
+    view.price, view.annual, view.price_points = c.price, annual, c.price_points
+    return view
+
+
+def _year_end_view(c: CompanyInputs, key: str) -> _View | None:
+    """The trailing twelve months as known at a past fiscal year end: the prior annual report plus that year's latest interim report."""
+    day = key.removeprefix("year end ")
+    year = int(day[:4])
+    fy = f"FY{year - 1}"
+    parts = sorted({m.group(1) for p in c.periods if (m := re.fullmatch(rf"YTD (Q[1-4]|H[12]) {year}", p))}, reverse=True)
+    for part in parts:
+        cur, prior = f"YTD {part} {year}", f"YTD {part} {year - 1}"
+        if fy in c.periods and prior in c.periods:
+            return _ttm_view(c, fy, cur, prior, c.price_points[key], f"TTM to {part} {year}, as known on {day}", known_by=day)
+    return None
+
+
+def _historical(c: CompanyInputs, current: dict) -> dict:
+    """Median of each multiple at the preceding five fiscal year ends (v1.0), and the current multiple against it."""
+    keys = sorted(k for k in c.price_points if k.startswith("year end "))[-5:]
+    observations = {base: [] for base in HISTORICAL}
+    for key in keys:
+        view = _year_end_view(c, key)
+        if view is None:
+            continue
+        day = key.removeprefix("year end ")
+        for base in HISTORICAL:
+            r = _run(SPECS_BY_ID[base], view, c.business_model)
+            if r.status == "calculated" and not r.exclude_from_peer_median and r.value > 0:
+                sources = []
+                for item in r.inputs:
+                    sources += [src for src in item["sources"] if src not in sources]
+                observations[base].append(Figure(f"{r.name} at {day}", r.value, "x", day, sources, f"From {view.label}."))
+    out = {}
+    for base in HISTORICAL:
+        median_spec, against_spec = SPECS_BY_ID[f"{base}_hist_median"], SPECS_BY_ID[f"{base}_vs_hist"]
+        if median_spec.not_for_financials and c.business_model in FINANCIAL_MODELS:
+            note = f"Not applicable to a {c.business_model} (v1.0 section 8)."
+            for spec in (median_spec, against_spec):
+                out[spec.id] = Result(spec.id, spec.name, "preceding fiscal year ends", "not_applicable", None, spec.unit, spec.formula, note=note)
+            continue
+        found = observations[base]
+        period = f"year ends {found[0].period[:4]}–{found[-1].period[:4]}" if found else "preceding fiscal year ends"
+        inputs = [o.as_input() for o in found]
+        if len(found) < 3:
+            note = (f"Only {len(found)} meaningful year-end value{'s' if len(found) != 1 else ''}; with fewer than three the historical "
+                    "comparison is omitted (v1.0).")
+            out[median_spec.id] = Result(median_spec.id, median_spec.name, period, "missing", None, "x", median_spec.formula, inputs, note)
+            out[against_spec.id] = Result(against_spec.id, against_spec.name, period, "missing", None, "fraction", against_spec.formula, [], note)
+            continue
+        median = statistics.median(o.value for o in found)
+        note = (f"Median of {len(found)} of 5 preceding fiscal year ends ({', '.join(o.period for o in found)}), each from the price and the "
+                "reports published by that date.")
+        if len(found) < 5:
+            note += f" Actual coverage is {len(found)} year ends, not five."
+        out[median_spec.id] = Result(median_spec.id, median_spec.name, period, "calculated", median, "x", median_spec.formula, inputs, note)
+        now = current.get(base)
+        if now is None or now.status != "calculated":
+            out[against_spec.id] = Result(against_spec.id, against_spec.name, period, now.status if now else "missing", None, "fraction",
+                                          against_spec.formula, [], "The current multiple is not calculated, so it is not compared.")
+        else:
+            sources = []
+            for item in now.inputs:
+                sources += [src for src in item["sources"] if src not in sources]
+            current_figure = Figure(f"{now.name} ({now.period})", now.value, "x", now.period, sources)
+            median_sources = []
+            for o in found:
+                median_sources += [src for src in o.sources if src not in median_sources]
+            median_figure = Figure(median_spec.name, median, "x", period, median_sources, note)
+            out[against_spec.id] = Result(against_spec.id, against_spec.name, now.period, "calculated", now.value / median - 1, "fraction",
+                                          against_spec.formula, [current_figure.as_input(), median_figure.as_input()],
+                                          "Negative means below the historical median. A description of the difference, not a valuation verdict.")
+    return out
+
+
 def analyse(c: CompanyInputs) -> dict:
-    """Current-period indicators (TTM when interim reports exist) and fiscal-year history for indicators that need no share price."""
+    """Current-period indicators (TTM when interim reports exist), historical medians, and fiscal-year history for indicators that need
+    no share price."""
     annual = _annual_views(c)
-    history = {fy: [_run(s, v, c.business_model) for s in SPECS if not s.needs_price and not s.multi_year] for fy, v in annual}
+    history = {fy: [_run(s, v, c.business_model) for s in SPECS if not (s.needs_price or s.multi_year or s.historical)] for fy, v in annual}
     current_view = _current_view(c, annual)
+    current = {s.id: _run(s, current_view, c.business_model) for s in SPECS if not s.historical}
+    current.update(_historical(c, current))
     notes = [c.demo_label] if c.demo_label else []
     if c.business_model in FINANCIAL_MODELS:
         notes.append(f"Treated as a {c.business_model}: industrial cash-flow, EBITDA, debt and liquidity measures are not applicable (v1.0 section 8).")
     if not (c.ytd_current and c.ytd_prior):
         notes.append(f"No interim reports: current values use {c.latest_fy}.")
     return {"company": c.name, "demo": bool(c.demo_label), "definition_version": DEFINITION_VERSION, "business_model": c.business_model,
-            "current_period": current_view.label, "current": [_run(s, current_view, c.business_model) for s in SPECS],
-            "history": history, "notes": notes}
+            "current_period": current_view.label, "current": [current[s.id] for s in SPECS], "history": history, "notes": notes}
 
 
 def compare_with_peers(target: dict, peers: dict) -> list[dict]:

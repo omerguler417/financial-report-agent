@@ -86,3 +86,17 @@ def test_progress_can_be_read_while_the_background_analysis_is_writing_it(tmp_pa
     finally:
         stop.set()
         writer.join()
+
+
+def test_the_user_can_choose_which_indicators_appear(tmp_path):
+    c = client(tmp_path)
+    catalogue = c.get("/api/config").json()["indicators"]
+    assert {"id", "name", "group"} <= set(catalogue[0]) and len(catalogue) >= 58
+    state = c.post("/api/analyses", json={"company": "Northgate", "demo": True, "as_of": "2026-11-20",
+                                          "indicators": ["pe", "roe_common", "graham"]}).json()
+    report = c.get(f"/api/analyses/{state['id']}/report").json()
+    assert {r["indicator"] for r in report["agent1"]["indicators"]["current"]} == {"pe", "roe_common", "graham"}
+    assert all(r["indicator"] in {"pe", "roe_common", "graham"} for rows in report["agent1"]["indicators"]["history"].values() for r in rows)
+    assert any("left out at your request" in lim for lim in report["agent3"]["limitations"])
+    assert c.post("/api/analyses", json={"company": "Northgate", "demo": True, "indicators": ["not_an_indicator"]}).status_code == 400
+    assert c.post("/api/analyses", json={"company": "Northgate", "demo": True, "indicators": []}).status_code == 400

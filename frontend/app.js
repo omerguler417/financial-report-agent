@@ -107,7 +107,64 @@ async function loadConfig() {
   }
   select.value = recall("folio.language", null) || S.config.default_output_language;
   select.addEventListener("change", () => remember("folio.language", select.value));
+  renderIndicatorPicker(S.config.indicators || []);
   $("upload-limits").textContent = `Uploads (up to ${S.config.max_upload_mb} MB per file, ${S.config.max_recording_hours} hours per recording) are kept with your files under Services & setup and labelled as uploads. They are not yet used in the analysis.`;
+}
+
+// ---------- choosing indicators ----------
+
+function renderIndicatorPicker(catalogue) {
+  const picker = $("indicator-picker");
+  picker.replaceChildren();
+  const groups = {};
+  for (const item of catalogue) (groups[item.group] = groups[item.group] || []).push(item);
+  for (const [group, items] of Object.entries(groups)) {
+    const box = el("details", null, "indicator-group");
+    const summary = el("summary");
+    const groupCheck = el("input");
+    groupCheck.type = "checkbox";
+    groupCheck.checked = true;
+    groupCheck.setAttribute("aria-label", `All ${group} indicators`);
+    const count = el("span", "", "group-count");
+    summary.append(groupCheck, el("span", group), count);
+    box.appendChild(summary);
+    const list = el("div", null, "checks");
+    const boxes = items.map((item) => {
+      const label = el("label", null, "check");
+      const input = el("input");
+      input.type = "checkbox";
+      input.checked = true;
+      input.name = "indicator";
+      input.value = item.id;
+      label.append(input, item.name);
+      list.appendChild(label);
+      return input;
+    });
+    const refresh = () => {
+      const ticked = boxes.filter((b) => b.checked).length;
+      groupCheck.checked = ticked === boxes.length;
+      groupCheck.indeterminate = ticked > 0 && ticked < boxes.length;
+      count.textContent = `${ticked} of ${boxes.length}`;
+      updateIndicatorCount();
+    };
+    groupCheck.addEventListener("click", (e) => e.stopPropagation());  // ticking the group does not open or close it
+    groupCheck.addEventListener("change", () => { boxes.forEach((b) => { b.checked = groupCheck.checked; }); refresh(); });
+    boxes.forEach((b) => b.addEventListener("change", refresh));
+    box.appendChild(list);
+    picker.appendChild(box);
+    refresh();
+  }
+}
+
+function chosenIndicators() {
+  const all = [...document.querySelectorAll('input[name="indicator"]')];
+  const ticked = all.filter((b) => b.checked).map((b) => b.value);
+  return { all: all.length, ticked };
+}
+
+function updateIndicatorCount() {
+  const { all, ticked } = chosenIndicators();
+  $("indicator-count").textContent = all ? `${ticked.length} of ${all} chosen` : "";
 }
 
 // ---------- running an analysis ----------
@@ -119,11 +176,14 @@ async function runAnalysis(event, chosenTicker) {
   if (!company) { box.replaceChildren(el("p", "Enter a company name or ticker.", "error")); return; }
   const demo = document.querySelector('input[name="mode"]:checked').value === "demo";
   const peers = $("peers").value.split(",").map((p) => p.trim()).filter(Boolean);
+  const choice = chosenIndicators();
+  if (choice.all && !choice.ticked.length) { box.replaceChildren(el("p", "Choose at least one indicator.", "error")); return; }
+  const indicators = choice.ticked.length === choice.all ? null : choice.ticked;  // null: all of them
   box.replaceChildren(el("p", "Starting…", "hint"));
   const response = await fetch("/api/analyses", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ company, demo, peers, output_language: $("language").value }),
+    body: JSON.stringify({ company, demo, peers, indicators: indicators, output_language: $("language").value }),
   });
   const body = await response.json().catch(() => ({}));
   if (response.status === 409) {  // several companies match: the user chooses
@@ -545,6 +605,7 @@ function renderMetrics() {
     const box = el("div", null, "card metric");
     box.appendChild(el("div", name, "metric-name"));
     box.appendChild(el("div", row ? row[1] : "—", "metric-value"));
+    if (!result) box.appendChild(el("div", "Not chosen for this analysis", "metric-sub"));
     const sub = el("div", null, "metric-sub");
     if (row && row[2] !== "—") sub.appendChild(document.createTextNode(`Peer median ${row[2]} · `));
     if (result) sub.appendChild(statusPill(result.status));

@@ -202,7 +202,7 @@ def test_demo_company_runs_end_to_end_with_every_number_sourced():
     analysis = ind.analyse(c)
     r = {x.indicator: x for x in analysis["current"]}
     assert analysis["demo"] and D.DEMO_LABEL in analysis["notes"][0]
-    assert all(x.status == "calculated" for x in r.values()), {k: x.note for k, x in r.items() if x.status != "calculated"}
+    assert all(x.status in ("calculated", "reported_only") for x in r.values()), {k: x.note for k, x in r.items() if x.status != "calculated"}
 
     f = D.financials(D.TARGET)
     fy, cur, prev = f["annual"]["FY2025"], f["ytd"]["YTD Q3 2026"], f["ytd"]["YTD Q3 2025"]

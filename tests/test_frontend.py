@@ -37,9 +37,13 @@ def test_fields_the_backend_does_not_use_yet_are_disabled_and_labelled(page):
     for control in ("horizon", "extra-questions"):
         tag = re.search(rf'<(?:select|textarea)[^>]*id="{control}"[^>]*>', page).group(0)
         assert "disabled" in tag, control
-    assert page.count('name="indicator-group"') >= 4
-    assert all("disabled" in tag for tag in re.findall(r'<input[^>]*name="indicator-group"[^>]*>', page))
-    assert page.count("Coming later") >= 3
+    assert page.count("Coming later") >= 2
+
+
+def test_the_indicator_choice_is_a_working_part_of_the_form(page):
+    assert 'id="indicator-picker"' in page
+    script = (FRONTEND / "app.js").read_text(encoding="utf-8")
+    assert "config.indicators" in script and "indicators:" in script
 
 
 def test_nothing_is_loaded_from_outside_the_project():

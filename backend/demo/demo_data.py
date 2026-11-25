@@ -47,12 +47,21 @@ LABELS = {
     "equity_common": "Equity attributable to common shareholders", "nci": "Noncontrolling interests", "equity_total": "Total equity",
     "shares_outstanding": "Common shares outstanding (millions)",
     "statutory_tax_rate": "U.S. federal statutory income tax rate (%)",
+    "cost_of_sales": "Cost of sales", "eps_basic": "Basic earnings per share (USD)", "eps_diluted": "Diluted earnings per share (USD)",
+    "weighted_shares_basic": "Weighted-average basic shares (millions)", "weighted_shares_diluted": "Weighted-average diluted shares (millions)",
+    "dividends_per_share": "Dividends paid per common share (USD)", "short_term_investments": "Short-term investments (liquid)",
+    "trade_receivables": "Trade receivables, net", "inventories": "Inventories", "trade_payables": "Trade payables", "goodwill": "Goodwill",
+    "intangible_assets": "Other intangible assets", "free_float_shares": "Free-float shares (millions)",
+    "interest_paid_in_cfo": "Interest paid (within operating activities)",
+    "lease_principal_outside_cfo": "Principal payments on lease liabilities (financing activities)",
 }
-INCOME = ["revenue", "ebit", "depreciation_amortisation", "interest_expense", "pretax_income", "income_tax", "net_income_group",
-          "nci_share_of_income", "net_income_common"]
-BALANCE = ["assets_total", "current_assets", "current_liabilities", "cash_eligible", "debt_ex_leases", "lease_liabilities",
-           "equity_common", "nci", "equity_total", "shares_outstanding"]
-CASHFLOW = ["cfo_reported", "capex", "dividends_paid_common"]
+INCOME = ["revenue", "cost_of_sales", "ebit", "depreciation_amortisation", "interest_expense", "pretax_income", "income_tax", "net_income_group",
+          "nci_share_of_income", "net_income_common", "eps_basic", "eps_diluted", "weighted_shares_basic", "weighted_shares_diluted",
+          "dividends_per_share"]
+BALANCE = ["assets_total", "current_assets", "cash_eligible", "short_term_investments", "trade_receivables", "inventories", "goodwill",
+           "intangible_assets", "current_liabilities", "trade_payables", "debt_ex_leases", "lease_liabilities", "equity_common", "nci",
+           "equity_total", "shares_outstanding", "free_float_shares"]
+CASHFLOW = ["cfo_reported", "interest_paid_in_cfo", "capex", "lease_principal_outside_cfo", "dividends_paid_common"]
 PROVENANCE = {"currency": "USD", "units": "millions", "consolidation_scope": "consolidated", "accounting_framework": "US GAAP",
               "restatement_status": "as originally reported"}
 
@@ -71,7 +80,9 @@ def _flows(c: dict, revenue: float, margin: float, debt: float) -> dict:
     net_group = _r(pretax - tax)
     nci_income = _r(net_group * c["nci_share"])
     net_common = _r(net_group - nci_income)
-    return {"revenue": _r(revenue), "ebit": ebit, "depreciation_amortisation": dna, "interest_expense": interest, "pretax_income": pretax,
+    bank = c["sector"] == "Financial Services"
+    extra = {} if bank else {"cost_of_sales": _r(revenue * 0.6)}
+    return {**extra, "interest_paid_in_cfo": _r(interest * 0.96), "revenue": _r(revenue), "ebit": ebit, "depreciation_amortisation": dna, "interest_expense": interest, "pretax_income": pretax,
             "income_tax": tax, "net_income_group": net_group, "nci_share_of_income": nci_income, "net_income_common": net_common,
             "cfo_reported": _r(net_group + dna * 0.95),
             "capex": _r(revenue * (0.03 if c["sector"] == "Financial Services" else 0.09)), "dividends_paid_common": _r(net_common * c["payout"])}
@@ -81,9 +92,23 @@ def _balance(c: dict, revenue: float, shares: float) -> dict:
     assets = _r(revenue * c["assets_mult"])
     equity_total = _r(assets * c["equity_ratio"])
     nci = _r(equity_total * c["nci_share"])
-    return {"assets_total": assets, "current_assets": _r(assets * 0.25), "current_liabilities": _r(assets * 0.15),
+    operating = {} if c["sector"] == "Financial Services" else {
+        "trade_receivables": _r(assets * 0.08), "inventories": _r(assets * 0.05), "trade_payables": _r(assets * 0.07)}
+    return {**operating, "short_term_investments": _r(assets * 0.02), "goodwill": _r(assets * 0.05), "intangible_assets": _r(assets * 0.02),
+            "free_float_shares": _r(shares * 0.93),
+            "assets_total": assets, "current_assets": _r(assets * 0.25), "current_liabilities": _r(assets * 0.15),
             "cash_eligible": _r(assets * 0.06), "debt_ex_leases": _r(assets * c["debt_ratio"]), "lease_liabilities": _r(assets * c["debt_ratio"] * 0.1),
             "equity_common": _r(equity_total - nci), "nci": nci, "equity_total": _r(_r(equity_total - nci) + nci), "shares_outstanding": _r(shares)}
+
+
+def _per_share_and_leases(v: dict) -> dict:
+    """Per-share figures and lease repayments, which need the period's net income, dividends and balance sheet."""
+    basic = _r(v["shares_outstanding"] * 1.004)
+    diluted = _r(basic * 1.012)
+    v.update(weighted_shares_basic=basic, weighted_shares_diluted=diluted, eps_basic=_r(v["net_income_common"] / basic),
+             eps_diluted=_r(v["net_income_common"] / diluted), dividends_per_share=_r(v["dividends_paid_common"] / basic),
+             lease_principal_outside_cfo=_r(v["lease_liabilities"] * 0.15))
+    return v
 
 
 def financials(ticker: str) -> dict:
@@ -96,15 +121,21 @@ def financials(ticker: str) -> dict:
             revenue *= 1 + c["growth"][i - 1]
         margin = c["margin"] * (1 + rng.uniform(-0.06, 0.06))
         bal = _balance(c, revenue, c["shares"] * (1 - 0.01 * i))
-        annual[f"FY{year}"] = {**_flows(c, revenue, margin, bal["debt_ex_leases"]), **bal}
+        annual[f"FY{year}"] = _per_share_and_leases({**_flows(c, revenue, margin, bal["debt_ex_leases"]), **bal})
     fy25 = annual["FY2025"]
     rev_next = fy25["revenue"] * (1 + c["growth"][-1])
-    cur = {**_flows(c, rev_next * 0.75, c["margin"], fy25["debt_ex_leases"] * 0.75),
-           **_balance(c, fy25["revenue"] * 1.03, fy25["shares_outstanding"] * 0.995)}
+    cur = _per_share_and_leases({**_flows(c, rev_next * 0.75, c["margin"], fy25["debt_ex_leases"] * 0.75),
+                                 **_balance(c, fy25["revenue"] * 1.03, fy25["shares_outstanding"] * 0.995)})
     fy24 = annual["FY2024"]
-    prev = {**_flows(c, fy25["revenue"] * 0.75, c["margin"], fy25["debt_ex_leases"] * 0.75),
-            **_balance(c, fy24["revenue"] * 1.03, fy24["shares_outstanding"] * 0.995)}
-    return {"annual": annual, "ytd": {"YTD Q3 2026": cur, "YTD Q3 2025": prev}}
+    prev = _per_share_and_leases({**_flows(c, fy25["revenue"] * 0.75, c["margin"], fy25["debt_ex_leases"] * 0.75),
+                                  **_balance(c, fy24["revenue"] * 1.03, fy24["shares_outstanding"] * 0.995)})
+    # Earlier Q3 reports (2021-2024): with them, the figures known at each past year end can be rebuilt for historical medians.
+    history = {}
+    for year in YEARS[:-1]:
+        fy, before = annual[f"FY{year}"], annual.get(f"FY{year - 1}", {"revenue": c["rev0"] * 0.97, "shares_outstanding": c["shares"]})
+        history[f"YTD Q3 {year}"] = _per_share_and_leases({**_flows(c, fy["revenue"] * 0.75, c["margin"], fy["debt_ex_leases"] * 0.75),
+                                                           **_balance(c, before["revenue"] * 1.03, before["shares_outstanding"] * 0.995)})
+    return {"annual": annual, "ytd": {"YTD Q3 2026": cur, "YTD Q3 2025": prev}, "ytd_history": history}
 
 
 # ---------- rendered documents ----------
@@ -168,6 +199,15 @@ def _documents(ticker: str) -> tuple[list[dict], list[dict]]:
                "The company is incorporated and headquartered in the United States.\n" + tax_line)
         add("annual_report", f"Annual report FY{year}", label, published, [cover, _business_page(ticker), income, balance, cash, mdna, tax],
             {3: e3, 4: e4, 5: e5, 7: [("statutory_tax_rate", label, STATUTORY_TAX_RATE, tax_line)]})
+
+    for year in YEARS[:-1]:
+        label = f"YTD Q3 {year}"
+        periods_q = [(label, f"{year}-01-01", f"{year}-09-30", f"{year}-10-28", f["ytd_history"][label])]
+        income, e2 = _statement("CONDENSED STATEMENT OF INCOME", INCOME, periods_q)
+        balance, e3 = _statement("CONDENSED BALANCE SHEET", BALANCE, periods_q)
+        cash, e4 = _statement("CONDENSED STATEMENT OF CASH FLOWS", CASHFLOW, periods_q)
+        cover = f"{DEMO_LABEL}\nQUARTERLY REPORT (Form 10-Q) for the quarter ended September 30, {year}\n{c['name']}"
+        add("quarterly_report", f"Quarterly report Q3 {year}", f"Q3 {year}", f"{year}-10-28", [cover, income, balance, cash], {2: e2, 3: e3, 4: e4})
 
     cur, prev = f["ytd"]["YTD Q3 2026"], f["ytd"]["YTD Q3 2025"]
     # Prior-year Q3 report: its balance sheet is the opening balance for trailing-twelve-month averages.

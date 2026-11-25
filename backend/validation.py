@@ -44,6 +44,8 @@ def _source(read: dict, doc_id: str, page: int, line: str | None = None) -> dict
     for key in ("publisher", "published"):  # news: publisher + date + link
         if doc.get(key):
             source[key] = doc[key]
+    if doc.get("publication_date"):  # reports: when it was published, for "what was known on a date"
+        source["published"] = doc["publication_date"]
     return {**source, "demo": True} if doc.get("demo") else source
 
 
