@@ -5,6 +5,7 @@ from datetime import date
 
 from backend import financials, indicators, prompts, report_blocks, report_reader, retrieval, validation
 from backend.errors import ProviderNotConfigured
+from backend.fetchers.edgar import SOURCE_GAPS
 from backend.fetchers.http_client import AccessDenied, FetchFailed
 from backend.fetchers.market_data import PriceUnavailable
 
@@ -51,16 +52,18 @@ def _passages(read: dict, queries: list[str], per_query: int) -> list[dict]:
     return [chosen[k] for k in sorted(chosen)]
 
 
-def company_inputs(company: dict, services, as_of: date, demo_label: str | None = None, read_documents: bool = True) -> tuple:
+def company_inputs(company: dict, services, as_of: date, demo_label: str | None = None, read_documents: bool = True,
+                   horizon: int = 5) -> tuple:
     """Figures for one company, checked and turned into calculation inputs. Returns (inputs, read, documents, check, notes).
-    With structured figures (EDGAR), a peer's reports are not downloaded: only its figures and price are needed."""
+    With structured figures (EDGAR), a peer's reports are not downloaded: only its figures and price are needed.
+    horizon: the fiscal years of history chosen for the analysis (3, 5 or 10)."""
     structured = getattr(services, "figures", None)
     if read_documents or not structured:
         read, documents, notes = read_reports(services.documents.find(company["ticker"]), as_of)
     else:
         read, documents, notes = {}, [], []
     if structured:  # SEC filers: figures from the SEC's XBRL data, no model needed
-        accepted, figure_notes = structured(company["ticker"], as_of)
+        accepted, figure_notes = structured(company["ticker"], as_of, years=horizon + 1)  # n years of growth need n + 1 years
         check, notes = {"accepted": accepted, "rejected": []}, notes + figure_notes
     else:
         request = prompts.build("extract_figures", {"ticker": company["ticker"], "company": company["name"], "fields": financials.FIELDS,
@@ -70,7 +73,7 @@ def company_inputs(company: dict, services, as_of: date, demo_label: str | None 
     price, points, price_note = None, {}, ""
     try:
         price = financials.closing_price(services.market, company["ticker"], as_of, demo=bool(demo_label))
-        points = financials.price_points(services.market, company["ticker"], as_of, demo=bool(demo_label))
+        points = financials.price_points(services.market, company["ticker"], as_of, demo=bool(demo_label), years=horizon)
     except ProviderNotConfigured:
         price_note = "no market-data provider is configured"
         notes.append("Share prices are not available: no market-data provider is configured, so price-based indicators and peers "
@@ -81,7 +84,9 @@ def company_inputs(company: dict, services, as_of: date, demo_label: str | None 
     model = financials.business_model(services.market.profile(company["ticker"]))
     inputs = financials.build_inputs(company["name"], check["accepted"], price, model, demo_label, points)
     inputs.price_note = price_note
+    inputs.horizon_years = horizon
     if structured:  # 10-K and 10-Q filers report under US GAAP
+        inputs.source_gaps = dict(SOURCE_GAPS)
         inputs.interest_rule = ("US GAAP classifies interest paid within operating activities (ASC 230), so no interest adjustment is "
                                 "needed.")
     return inputs, read, documents, check, notes
@@ -100,18 +105,20 @@ def _keep(analysis: dict, chosen: set | None) -> dict:
             "history": {fy: [r for r in rows if r.indicator in chosen] for fy, rows in analysis["history"].items()}}
 
 
-def run(company: dict, peer_selection: dict, services, as_of: date, context: dict | None = None, chosen: list[str] | None = None) -> dict:
+def run(company: dict, peer_selection: dict, services, as_of: date, context: dict | None = None, chosen: list[str] | None = None,
+        horizon: int = 5) -> dict:
     """context, when given, receives what Agent 3 needs to check its citations: the pages read and the calculated results.
-    chosen: the indicator ids the user wants reported (all when None)."""
+    chosen: the indicator ids the user wants reported (all when None). horizon: fiscal years of history (3, 5 or 10)."""
     demo_label = getattr(services, "label", None)
     chosen = set(chosen) if chosen else None
-    inputs, read, documents, check, notes = company_inputs(company, services, as_of, demo_label)
+    inputs, read, documents, check, notes = company_inputs(company, services, as_of, demo_label, horizon=horizon)
     analysis = _keep(indicators.analyse(inputs), chosen)
 
     peer_analyses = {}
     for peer in peer_selection.get("peers", []):
         try:
-            peer_inputs = company_inputs({"ticker": peer["ticker"], "name": peer["name"]}, services, as_of, demo_label, read_documents=False)[0]
+            peer_inputs = company_inputs({"ticker": peer["ticker"], "name": peer["name"]}, services, as_of, demo_label, read_documents=False,
+                                         horizon=horizon)[0]
             peer_analyses[peer["ticker"]] = _keep(indicators.analyse(peer_inputs), chosen)
         except Exception as exc:  # one peer's missing data must not stop the analysis; it is reported instead
             notes.append(f"Peer {peer['ticker']} could not be analysed: {exc}")
@@ -138,7 +145,8 @@ def run(company: dict, peer_selection: dict, services, as_of: date, context: dic
         "documents": documents,
         "summary": summary,
         "indicators": {"definition_version": analysis["definition_version"], "business_model": analysis["business_model"],
-                       "current_period": analysis["current_period"], "current": [r.to_dict() for r in analysis["current"]],
+                       "current_period": analysis["current_period"], "horizon_years": analysis["horizon_years"],
+                       "current": [r.to_dict() for r in analysis["current"]],
                        "history": {fy: [r.to_dict() for r in rs] for fy, rs in analysis["history"].items()}, "notes": analysis["notes"],
                        "left_out": [s.name for s in indicators.SPECS if chosen and s.id not in chosen]},
         "peer_comparison": comparison,

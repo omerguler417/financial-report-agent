@@ -121,3 +121,75 @@ def test_the_us_gaap_interest_rule_lets_standardised_fcf_be_built_without_an_int
     assert r.value == pytest.approx(2000 / 83)
     fcf = next(i for i in r.inputs if i["name"] == "fcf_standardised")
     assert fcf["value"] == pytest.approx(83)
+
+
+# ---------- gaps in the source data (decided 27 November 2026) ----------
+
+def test_without_dividends_per_share_paid_the_yield_is_estimated_from_cash_dividends():
+    c = extended()
+    for period in c.periods.values():
+        period.pop("dividends_per_share", None)
+    r = current(c)["dividend_yield"]
+    # TTM common dividends paid 30 + 24 − 21 = 33 (USD millions) ÷ 100 million shares at Q3 2026 = 0.33 per share; ÷ price 20
+    assert r.status == "estimated" and r.value == pytest.approx(0.33 / 20)
+    assert "estimated" in r.note.lower() and "cash dividends paid" in r.note
+    assert {i["name"] for i in r.inputs} >= {"dividends_paid_common", "shares_outstanding", "price"}
+
+
+def test_percentages_are_compared_with_the_peer_median_in_percentage_points():
+    target = ind.analyse(extended())
+    peers = {f"P{i}": ind.analyse(extended(price=fig("price", p, "close 2026-11-20", "USD per share"))) for i, p in enumerate((10.0, 25.0, 40.0))}
+    rows = {row["indicator"]: row for row in ind.compare_with_peers(target, peers)}
+    fcf_yield = rows["fcf_yield"]
+    assert fcf_yield["comparison"] == pytest.approx(fcf_yield["company_value"] - fcf_yield["peer_median"])
+    assert fcf_yield["comparison_type"] == "percentage-point difference"
+    assert rows["pe"]["comparison_type"].startswith("peer discount")  # multiples keep the peer discount
+    assert rows["asset_turnover"]["comparison"] is None  # a multiple without a v1.0 comparison stays median only
+
+
+def test_a_field_the_data_source_does_not_have_is_explained():
+    c = extended()
+    for period in c.periods.values():
+        period.pop("free_float_shares", None)
+    c.source_gaps = {"free_float_shares": "The SEC's data has no free-float share count."}
+    assert "The SEC's data has no free-float share count." in current(c)["free_float"].note
+
+
+def test_an_omitted_historical_median_says_what_was_missing_at_each_year_end():
+    r = {x.indicator: x for x in ind.analyse(demo_company_inputs(D.TARGET, date(2023, 11, 20)))["current"]}
+    note = r["pe_hist_median"].note
+    assert "fewer than three" in note and "At 2021-12-31:" in note
+
+
+def test_ev_sales_and_ev_ebit_are_also_compared_with_their_own_history():
+    r = {x.indicator: x for x in ind.analyse(demo_company_inputs(D.TARGET, ON))["current"]}
+    for base, name in (("ev_sales", "EV/sales"), ("ev_ebit", "EV/EBIT")):
+        median, against = r[f"{base}_hist_median"], r[f"{base}_vs_hist"]
+        assert median.status == "calculated" and median.name == f"{name} historical median", (base, median.note)
+        assert against.value == pytest.approx(r[base].value / median.value - 1)
+    assert ind.SPECS_BY_ID["ev_sales_hist_median"].not_for_financials  # like EV/sales itself
+
+
+def test_twelve_months_never_mix_the_standard_d_and_a_with_the_companys_own_element():
+    c = extended()
+    del c.periods["YTD Q3 2025"]["depreciation_amortisation"]  # standard D&A missing in one part of the twelve months
+    for period, value in (("FY2025", 32), ("YTD Q3 2026", 26), ("YTD Q3 2025", 23)):  # the company's broader own element, all parts
+        c.periods[period]["depreciation_amortisation_own"] = fig("depreciation_amortisation_own", value, period)
+    r = current(c)
+    ebitda = next(i for i in r["ev_ebitda"].inputs if i["name"] == "ebitda")
+    assert ebitda["value"] == pytest.approx(170 + (32 + 26 - 23))  # EBIT 170 + own D&A 35, not standard and own mixed
+    assert r["ev_ebitda"].status == "calculated"
+    del c.periods["YTD Q3 2026"]["depreciation_amortisation_own"]  # neither set complete: missing, never mixed
+    assert current(c)["ev_ebitda"].status == "missing"
+
+
+def test_a_historical_median_says_when_some_year_ends_use_the_companys_own_element():
+    from backend.indicators import Figure
+    c = demo_company_inputs(D.TARGET, ON)
+    for period in ("FY2024", "YTD Q3 2025", "YTD Q3 2024"):  # the year end 2025-12-31 set, moved to the company's own element
+        f = c.periods[period].pop("depreciation_amortisation")
+        sources = [{**s, "tag": "nrth:DepreciationAmortizationAndOther"} for s in f.sources]
+        c.periods[period]["depreciation_amortisation_own"] = Figure("depreciation_amortisation_own", f.value, f.unit, f.period, sources)
+    r = {x.indicator: x for x in ind.analyse(c)["current"]}
+    assert r["ev_ebitda_hist_median"].status == "calculated"
+    assert "company's own" in r["ev_ebitda_hist_median"].note and "company's own" not in r["pe_hist_median"].note

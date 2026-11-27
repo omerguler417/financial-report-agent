@@ -97,7 +97,7 @@ class TwelveDataProvider(PriceProvider):
 
     name = "twelve_data"
     SOURCE = "Twelve Data"
-    YEARS = 6  # enough for 12-month returns and the preceding five fiscal year ends
+    YEARS = 11  # one request covers 12-month returns and the year ends of the longest horizon (10 years)
 
     def __init__(self, settings: Settings, client: PoliteClient):
         super().__init__(settings, client)

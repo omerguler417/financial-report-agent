@@ -290,6 +290,56 @@ tr:hover td { background: #fafbfd; }
 
 /* ---------- responsive ---------- */
 .scrim { display: none; }
+/* ---------- reading text: statements without boxes ---------- */
+.prose-item { padding: 0.6rem 0; border-bottom: 1px solid #eef1f4; }
+.prose-item:last-child { border-bottom: 0; }
+.prose-item p { margin: 0; font-size: 0.92rem; line-height: 1.65; }
+.prose-item.unverified { border-left: 3px solid var(--amber); padding-left: 0.75rem; }
+.prose-tag { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin-bottom: 0.15rem; }
+.prose-heading { font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--blue); margin: 1rem 0 0.1rem; }
+.prose-heading:first-child { margin-top: 0.2rem; }
+details.why { margin-top: 0.25rem; font-size: 0.78rem; }
+details.why summary { cursor: pointer; color: var(--amber); font-weight: 600; }
+.numbers-summary { display: grid; grid-template-columns: minmax(9rem, max-content) 1fr; gap: 0.55rem 1.2rem; margin: 0 0 0.6rem; }
+.numbers-summary dt { font-weight: 700; font-size: 0.85rem; color: var(--navy); padding-top: 0.1rem; }
+.numbers-summary dd { margin: 0; }
+.numbers-summary dd p { margin: 0; font-size: 0.88rem; line-height: 1.6; }
+.link-button { border: 0; background: none; padding: 0; color: var(--blue); font-weight: 600; cursor: pointer; font-size: 0.85rem; }
+.link-button:hover { text-decoration: underline; }
+.metric .metric-sub .pill { margin-left: 0.3rem; }
+.nowrap { white-space: nowrap; }
+
+/* ---------- financials: comparison lines, compact tables, footnotes ---------- */
+.findings-panel { margin-top: 0.9rem; padding: 0.85rem 1rem 0.4rem; background: #f7f9fc; border-left: 3px solid var(--blue); border-radius: 0 9px 9px 0; }
+.findings-head { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--blue); margin-bottom: 0.45rem; }
+.findings-lead { font-weight: 600; margin-bottom: 0.6rem; }
+.findings-section { margin-bottom: 0.55rem; }
+.findings-label { font-size: 0.75rem; font-weight: 700; color: var(--muted); margin-bottom: 0.1rem; }
+.findings-panel p { font-size: 0.88rem; line-height: 1.6; margin: 0 0 0.4rem; }
+.details-text { font-size: 0.85rem; margin-bottom: 0.5rem; }
+table.compact td { padding: 0.42rem 0.5rem; }
+table.compact td.muted { color: var(--muted); }
+table.compact td.strong { font-weight: 700; }
+tr.row-main { cursor: pointer; }
+tr.row-main:hover td { background: #f7f9fc; }
+tr.row-main .caret { display: inline-block; width: 0.9rem; color: var(--muted); font-size: 0.7rem; transition: transform 0.15s; }
+tr.row-main.open .caret { transform: rotate(90deg); }
+tr.row-main .pill { margin-left: 0.35rem; }
+tr.row-details td { background: #f9fafc; padding: 0.7rem 0.9rem 0.8rem 1.4rem; }
+.details .each-peer { font-size: 0.82rem; margin-bottom: 0.5rem; }
+.details .each-peer .label, .facts dt { color: var(--muted); font-size: 0.75rem; font-weight: 700; }
+.facts { display: grid; grid-template-columns: max-content 1fr; gap: 0.2rem 0.8rem; margin: 0 0 0.5rem; font-size: 0.8rem; }
+.facts dd { margin: 0; }
+sup.fn { margin-left: 0.15rem; }
+.fn-link { border: 0; background: none; padding: 0 0.1rem; color: var(--blue); font-size: 0.68rem; font-weight: 700; cursor: pointer; }
+.fn-link:hover { text-decoration: underline; }
+details.sources-box, details.more { margin-top: 0.7rem; border-top: 1px solid var(--line); padding-top: 0.5rem; font-size: 0.8rem; }
+details.sources-box summary, details.more summary { cursor: pointer; color: var(--muted); font-weight: 700; }
+details.sources-box ol { margin: 0.4rem 0 0; padding-left: 1.4rem; }
+details.sources-box li { margin-bottom: 0.2rem; }
+.peer-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.peer-chip { padding: 0.25rem 0.6rem; border-radius: 99px; background: var(--blue-soft); color: var(--navy); font-size: 0.8rem; }
+
 @media (max-width: 1000px) {
   .two-col, .step-pair { grid-template-columns: 1fr; }
   .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }

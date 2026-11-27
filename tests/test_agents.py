@@ -207,3 +207,16 @@ def test_a_disagreement_without_positions_is_not_shown(tmp_path):
             return {"overview": [], "risks": [], "disagreements": ["There are no explicit disagreements in the data."]}
     services.model = NothingToCompare()
     assert agent3.run({**COMPANY, "exchange": "NYSE"}, a1, a2, services, context)["disagreements"] == []
+
+
+def test_report_statements_carry_a_topic_for_the_dashboard():
+    from backend import prompts
+    assert "topic" in prompts.TASKS["summarise_reports"]["answer_format"]["statements"][0]
+    from tests.helpers import make_settings
+    from fastapi.testclient import TestClient
+    from backend import main
+    import tempfile, pathlib
+    c = TestClient(main.create_app(make_settings(pathlib.Path(tempfile.mkdtemp())), background_jobs=False))
+    state = c.post("/api/analyses", json={"company": "Northgate", "demo": True, "as_of": "2026-11-20"}).json()
+    summary = c.get(f"/api/analyses/{state['id']}/report").json()["agent1"]["summary"]
+    assert {s["topic"] for s in summary} == {"business", "results", "outlook", "risks"}  # kept through the checks

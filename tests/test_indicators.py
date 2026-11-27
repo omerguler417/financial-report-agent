@@ -69,7 +69,7 @@ def test_core_indicators_match_hand_calculations():
         assert r[key].value == pytest.approx(value), key
     assert r["pe"].unit == "x" and r["roe_common"].unit == "fraction" and r["bvps"].unit == "USD per share"
     assert r["debt_equity"].other_views["excluding_leases"] == pytest.approx(260 / 500)  # borrowings at Q3 2026
-    assert all(x.definition_version == "v1.0" and x.formula for x in r.values())
+    assert all(x.definition_version == "v1.1" and x.formula for x in r.values())
 
 
 def test_ttm_combines_three_reports_and_cites_each_of_them():

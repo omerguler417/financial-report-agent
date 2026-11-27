@@ -24,13 +24,14 @@ def wording_issues(text: str) -> list[str]:
 
 
 ACCESSION = re.compile(r"\b\d{10}-\d{2}-\d{6}\b")  # SEC filing numbers are references, never figures
+AGENT_NAME = re.compile(r"\bAgents?\s+\d(?:\s*(?:,|and|&)\s*\d)*\b")  # "Agent 1", "Agents 1 and 2" name a step, not a figure
 ISO_DATE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")  # dates such as 2026-11-24 are not figures either
 
 
 def numbers_in(text: str) -> list[tuple]:
     """(as written, value, decimals, is_percent) for each number, skipping years, labels such as Q3 or FY2025, and filing numbers."""
     out = []
-    text = ISO_DATE.sub(" ", ACCESSION.sub(" ", text))
+    text = AGENT_NAME.sub(" ", ISO_DATE.sub(" ", ACCESSION.sub(" ", text)))
     for m in NUMBER.finditer(text):
         sign, whole, fraction, percent = m.group(1), m.group(2), m.group(3) or "", bool(m.group(4))
         value = float(whole.replace(",", "") + fraction) * (-1 if sign else 1)
@@ -133,11 +134,12 @@ def _result_matches(number: tuple, result: dict) -> bool:
 
 
 def _strip_references(text: str, read: dict) -> str:
-    """Remove document references the model wrote into a sentence, such as "[0001193125-26-323660]" or "(10-K, page 35)": the
+    """Remove document references the model wrote into a sentence, such as "[0001193125-26-323660]", "(10-K, page 35)" or "[1]": the
     citations already carry them, and their digits are not figures."""
     ids = [re.escape(d) for d in read if len(d) > 6]
     reference = rf"(?:{'|'.join(ids)}|\d{{10}}-\d{{2}}-\d{{6}})" if ids else r"\d{10}-\d{2}-\d{6}"
     text = re.sub(rf"\s*[\[(][^\])]*{reference}[^\])]*[\])]", "", text)
+    text = re.sub(r"\s*\[\s*S?\d{1,3}(?:\s*[,;–-]\s*S?\d{1,3})*\s*\]", "", text)  # footnote markers such as [1], [2, 3] or [S4]
     text = re.sub(r"\s{2,}", " ", text)
     return re.sub(r"\s+([.,;:])", r"\1", text).strip()
 
@@ -155,6 +157,11 @@ def _find_result(citation: dict, results: list[dict], current_period: str | None
     return matches[0] if len(matches) == 1 else None
 
 
+def _blank(c) -> bool:
+    return isinstance(c, dict) and not str(c.get("doc_id") or "").strip() and not str(c.get("indicator") or "").strip() \
+        and not str(c.get("news_id") or "").strip()
+
+
 def check_statements(statements: list[dict], read: dict, results: list[dict], current_period: str | None = None) -> list[dict]:
     """results: calculated indicator results as dicts ({indicator, period, value, unit, ...}); current_period: the analysis's
     current period, used when a citation of a result gives none."""
@@ -162,7 +169,8 @@ def check_statements(statements: list[dict], read: dict, results: list[dict], cu
     for s in as_statements(statements):
         s = {**s, "text": _strip_references(str(s.get("text", "")), read)}
         issues, texts, cited_results, citations = [], [], [], []
-        for c in as_list(s.get("citations")):
+        given = [c for c in as_list(s.get("citations")) if not _blank(c)]  # an empty placeholder copied from the answer format is no citation
+        for c in given:
             if not isinstance(c, dict):
                 issues.append(f"A citation was not in the expected form ({str(c)[:40]}).")
                 continue
@@ -180,7 +188,7 @@ def check_statements(statements: list[dict], read: dict, results: list[dict], cu
                     continue
                 texts.append(text)
                 citations.append(_source(read, c["doc_id"], c["page"]))
-        if not as_list(s.get("citations")):
+        if not given:
             issues.append("No source cited.")
         for number in numbers_in(s.get("text", "")):
             in_text = any(abs(n[1] - number[1]) < 1e-9 for t in texts for n in numbers_in(t))

@@ -109,9 +109,9 @@ def months_before(day, months: int):
             continue
 
 
-def price_points(market, ticker: str, on, demo: bool = False) -> dict:
-    """Split-adjusted closes for price returns (now, 1, 3 and 12 months earlier) and closes at the preceding five calendar year ends,
-    for historical multiple medians. A price that cannot be found is left out, never invented."""
+def price_points(market, ticker: str, on, demo: bool = False, years: int = 5) -> dict:
+    """Split-adjusted closes for price returns (now, 1, 3 and 12 months earlier) and closes at the preceding `years` calendar year
+    ends (the analysis horizon), for historical multiple medians. A price that cannot be found is left out, never invented."""
     from datetime import date
     points = {}
     wanted = {"end": on, "1m": months_before(on, 1), "3m": months_before(on, 3), "12m": months_before(on, 12)}
@@ -124,7 +124,7 @@ def price_points(market, ticker: str, on, demo: bool = False) -> dict:
         source = {"publisher": q.source, "date": q.price_date, "exchange": q.exchange, **({"demo": True} if demo else {})}
         points[key] = Figure("adjusted_close", adjusted, f"{q.currency} per share", f"close {q.price_date}", [source],
                              "" if q.adjusted_close is not None else "No split-adjusted series; the plain close is used.")
-    for year in range(on.year - 1, on.year - 6, -1):
+    for year in range(on.year - 1, on.year - 1 - years, -1):
         day = date(year, 12, 31)
         try:
             points[f"year end {day.isoformat()}"] = closing_price(market, ticker, day, demo)

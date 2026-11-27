@@ -374,3 +374,153 @@ def test_requests_to_the_price_provider_are_spaced_to_its_per_minute_limit(tmp_p
     for _ in range(3):
         client.get("https://api.twelvedata.com/time_series")
     assert sum(s for s in clock.sleeps if s > 0) >= 15.0  # three requests, at least 7.5 seconds apart
+
+
+# ---------- filling peer data gaps: tags that differ between annual and quarterly reports (decided 27 November 2026) ----------
+
+def figures_with(tmp_path, change, as_of="2026-05-15"):
+    """Figures from a copy of the fake SEC data, changed by `change(us_gaap, dei)`."""
+    from copy import deepcopy
+    from datetime import date
+    facts = deepcopy(FACTS)
+    change(facts["facts"]["us-gaap"], facts["facts"]["dei"])
+    fake = FakeSEC()
+    original = fake.__call__
+
+    def answer(request):
+        if str(request.url) == edgar.FACTS_URL.format(cik=CIK):
+            return httpx2.Response(200, json=facts)
+        return original(request)
+    settings = settings_for(tmp_path)
+    e = edgar.Edgar(PoliteClient(settings, transport=httpx2.MockTransport(answer)), settings)
+    found, notes = e.figures("EXMP", date.fromisoformat(as_of))
+    return {(f["field"], f["period"]): f for f in found}, notes
+
+
+def test_each_period_uses_the_lease_tags_its_own_report_uses(tmp_path):
+    def change(gaap, dei):  # the annual reports tag the total; the quarterly reports tag current and non-current parts only
+        gaap["OperatingLeaseLiability"] = tag("USD", ("2024-06-30", 15 * B, K24), ("2025-06-30", 16 * B, K25))
+        gaap["OperatingLeaseLiabilityCurrent"] = tag("USD", ("2026-03-31", 3 * B, Q26), ("2025-03-31", 2.5 * B, Q25))
+        gaap["OperatingLeaseLiabilityNoncurrent"] = tag("USD", ("2026-03-31", 14 * B, Q26), ("2025-03-31", 13 * B, Q25))
+    f, _ = figures_with(tmp_path, change)
+    assert f[("lease_liabilities", "FY2025")]["value"] == pytest.approx(16000 + 11000)
+    quarter = f[("lease_liabilities", "YTD Q3 2026")]
+    assert quarter["value"] == pytest.approx(3000 + 14000 + 12000) and "OperatingLeaseLiabilityNoncurrent" in quarter["note"]
+
+
+def test_notes_and_loans_count_as_debt_and_a_zero_tag_does_not_hide_the_real_figure(tmp_path):
+    def change(gaap, dei):  # Oracle's way: notes payable and loans; an old LongTermDebt tag of 0 must not win
+        gaap["LongTermDebt"] = tag("USD", ("2024-06-30", 0, K24))
+        gaap["LongTermNotesAndLoans"] = tag("USD", *[(p, v * B, f) for p, v, f in balances(40, 38, 39, 37)])
+        gaap["NotesPayableCurrent"] = tag("USD", *[(p, v * B, f) for p, v, f in balances(5, 6, 5.5, 7)])
+    f, _ = figures_with(tmp_path, change)
+    assert f[("debt_ex_leases", "FY2024")]["value"] == pytest.approx(45000)
+    assert f[("debt_ex_leases", "YTD Q3 2026")]["value"] == pytest.approx(44000)
+    assert "LongTermNotesAndLoans" in f[("debt_ex_leases", "YTD Q3 2026")]["note"]
+
+
+def test_the_cover_page_share_count_is_used_when_the_balance_sheet_has_none(tmp_path):
+    def change(gaap, dei):
+        gaap["CommonStockSharesOutstanding"] = tag("shares", ("2025-06-30", 7.43 * B, K25))  # annual reports only
+        dei["EntityCommonStockSharesOutstanding"] = tag("shares", ("2026-04-20", 7.41 * B, Q26), ("2025-07-25", 7.43 * B, K25))
+    f, _ = figures_with(tmp_path, change)
+    shares = f[("shares_outstanding", "YTD Q3 2026")]
+    assert shares["value"] == pytest.approx(7410) and shares["unit"] == "millions of shares"
+    assert "cover page" in shares["note"] and "2026-04-20" in shares["note"]
+    assert shares["sources"][0]["tag"] == "dei:EntityCommonStockSharesOutstanding" and shares["sources"][0]["doc_id"] == Q26[0]
+    assert f[("shares_outstanding", "FY2025")]["sources"][0]["tag"] == "us-gaap:CommonStockSharesOutstanding"  # the balance sheet comes first
+
+
+def test_minority_interest_missing_from_a_report_counts_as_none_for_that_period(tmp_path):
+    def change(gaap, dei):  # reported in the FY2024 annual report only, as Salesforce stopped after 2011
+        gaap["MinorityInterest"] = tag("USD", ("2024-06-30", 2 * B, K24))
+    f, _ = figures_with(tmp_path, change)
+    assert f[("nci", "FY2024")]["value"] == pytest.approx(2000)
+    nci = f[("nci", "YTD Q3 2026")]
+    assert nci["value"] == 0.0 and "No minority-interest figure in this report" in nci["note"]
+    assert f[("equity_total", "YTD Q3 2026")]["value"] == pytest.approx(330000)
+
+
+def test_a_missing_share_count_and_free_float_are_explained(tmp_path):
+    def change(gaap, dei):
+        del gaap["CommonStockSharesOutstanding"]
+    f, notes = figures_with(tmp_path, change)
+    assert ("shares_outstanding", "YTD Q3 2026") not in f
+    assert any("no share count for YTD Q3 2026" in n for n in notes)  # the latest period is named
+    assert "free_float_shares" in edgar.SOURCE_GAPS
+
+
+# ---------- a company's own label in the full filing, when the summary data has no standard figure (decided 27 November 2026) ----------
+
+def instance(prefix, periods):
+    """A filing's full XBRL data file with the company's own D&A element for the given (start, end, value) periods, plus a
+    three-month value and a segment value that must both be ignored."""
+    contexts, facts = [], []
+    for i, (start, end, value) in enumerate(periods):
+        contexts.append(f'<xbrli:context id="c{i}"><xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">1</xbrli:identifier>'
+                        f'</xbrli:entity><xbrli:period><xbrli:startDate>{start}</xbrli:startDate><xbrli:endDate>{end}</xbrli:endDate>'
+                        '</xbrli:period></xbrli:context>')
+        facts.append(f'<{prefix}:DepreciationAmortizationAndOther contextRef="c{i}" unitRef="usd" decimals="-6">{value}'
+                     f'</{prefix}:DepreciationAmortizationAndOther>')
+        contexts.append(f'<xbrli:context id="s{i}"><xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">1</xbrli:identifier>'
+                        '<xbrli:segment><xbrldi:explicitMember dimension="us-gaap:StatementBusinessSegmentsAxis">exmp:CloudMember'
+                        '</xbrldi:explicitMember></xbrli:segment></xbrli:entity><xbrli:period>'
+                        f'<xbrli:startDate>{start}</xbrli:startDate><xbrli:endDate>{end}</xbrli:endDate></xbrli:period></xbrli:context>')
+        facts.append(f'<{prefix}:DepreciationAmortizationAndOther contextRef="s{i}" unitRef="usd" decimals="-6">1</{prefix}:DepreciationAmortizationAndOther>')
+    contexts.append('<xbrli:context id="qtr"><xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">1</xbrli:identifier></xbrli:entity>'
+                    '<xbrli:period><xbrli:startDate>2026-01-01</xbrli:startDate><xbrli:endDate>2026-03-31</xbrli:endDate></xbrli:period></xbrli:context>')
+    facts.append(f'<{prefix}:DepreciationAmortizationAndOther contextRef="qtr" unitRef="usd" decimals="-6">2</{prefix}:DepreciationAmortizationAndOther>')
+    return ('<?xml version="1.0" encoding="utf-8"?><xbrli:xbrl xmlns:xbrli="http://www.xbrl.org/2003/instance" '
+            f'xmlns:{prefix}="http://example.com/2026" xmlns:us-gaap="http://fasb.org/us-gaap/2024" xmlns:xbrldi="http://xbrl.org/2006/xbrldi">'
+            + "".join(contexts) + "".join(facts) + "</xbrli:xbrl>")
+
+
+FILINGS = {Q26[0]: instance("exmp", [(*YTD26, 18_500_000_000), (*YTD25, 14_500_000_000)]),
+           K25[0]: instance("exmp", [(*FY25, 21_000_000_000), (*FY24, 16_000_000_000)])}
+
+
+def edgar_with_filings(tmp_path, facts):
+    fake = FakeSEC()
+    original = fake.__call__
+
+    def answer(request):
+        url = str(request.url)
+        if url == edgar.FACTS_URL.format(cik=CIK):
+            return httpx2.Response(200, json=facts)
+        for accn, xml in FILINGS.items():
+            folder = f"/Archives/edgar/data/{CIK}/{accn.replace('-', '')}/"
+            if url.endswith(folder + "index.json"):
+                fake.requests.append(request)
+                return httpx2.Response(200, json={"directory": {"item": [{"name": "exmp.htm"}, {"name": "exmp_htm.xml"}, {"name": "FilingSummary.xml"}]}})
+            if url.endswith(folder + "exmp_htm.xml"):
+                fake.requests.append(request)
+                return httpx2.Response(200, text=xml, headers={"content-type": "application/xml"})
+        return original(request)
+    settings = settings_for(tmp_path)
+    return edgar.Edgar(PoliteClient(settings, transport=httpx2.MockTransport(answer)), settings), fake
+
+
+def test_a_missing_d_and_a_is_read_from_the_companys_own_element_for_every_part_of_the_twelve_months(tmp_path):
+    from copy import deepcopy
+    from datetime import date
+    facts = deepcopy(FACTS)
+    da = facts["facts"]["us-gaap"]["DepreciationDepletionAndAmortization"]["units"]["USD"]
+    facts["facts"]["us-gaap"]["DepreciationDepletionAndAmortization"]["units"]["USD"] = [r for r in da if r["end"] != "2025-03-31"]
+    e, fake = edgar_with_filings(tmp_path, facts)
+    found, notes = e.figures("EXMP", date(2026, 5, 15))
+    f = {(x["field"], x["period"]): x for x in found}
+    assert ("depreciation_amortisation", "YTD Q3 2025") not in f  # the standard figure stays missing; nothing is mixed into it
+    own = {label: f[("depreciation_amortisation_own", label)] for label in ("FY2025", "YTD Q3 2026", "YTD Q3 2025")}
+    assert [own[label]["value"] for label in ("FY2025", "YTD Q3 2026", "YTD Q3 2025")] == pytest.approx([21000.0, 18500.0, 14500.0])
+    assert own["YTD Q3 2025"]["sources"][0]["tag"] == "exmp:DepreciationAmortizationAndOther"
+    assert own["YTD Q3 2025"]["sources"][0]["doc_id"] == Q26[0] and own["FY2025"]["sources"][0]["doc_id"] == K25[0]
+    assert "company's own" in own["FY2025"]["note"] and "includes other items" in own["FY2025"]["note"]
+    assert any("own XBRL" in n for n in notes)
+
+
+def test_the_full_filing_is_not_opened_when_the_standard_figures_are_complete(tmp_path):
+    from datetime import date
+    e, fake = edgar_for(tmp_path)
+    found, _ = e.figures("EXMP", date(2026, 5, 15))
+    assert not any("index.json" in str(r.url) or str(r.url).endswith(".xml") for r in fake.requests)
+    assert not any(x["field"] == "depreciation_amortisation_own" for x in found)

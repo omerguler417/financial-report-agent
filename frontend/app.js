@@ -170,6 +170,18 @@ function updateIndicatorCount() {
 
 // ---------- running an analysis ----------
 
+function resetForm() {  // "New analysis": an empty form; an analysis that is running carries on under Agent workflow
+  $("company").value = "";
+  $("peers").value = "";
+  $("horizon").value = "5";
+  $("transcript-upload").value = "";
+  document.querySelector('input[name="mode"][value="live"]').checked = true;
+  $("analysis-status").replaceChildren();
+  if (S.config) renderIndicatorPicker(S.config.indicators || []);
+  if (currentPage() === "new") showPage();
+  setTimeout(() => $("company").focus(), 50);  // after the page has switched
+}
+
 async function runAnalysis(event, chosenTicker) {
   if (event) event.preventDefault();
   const box = $("analysis-status");
@@ -185,7 +197,7 @@ async function runAnalysis(event, chosenTicker) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ company, demo, peers, indicators: indicators, output_language: $("language").value,
-      transcript_upload: $("transcript-upload").value || null }),
+      transcript_upload: $("transcript-upload").value || null, horizon_years: Number($("horizon").value) }),
   });
   const body = await response.json().catch(() => ({}));
   if (response.status === 409) {  // several companies match: the user chooses
@@ -559,32 +571,48 @@ function keyFigureRows() {
 }
 function historyTable() { return viewTable((b) => b.columns[0] === "Indicator" && /^FY/.test(b.columns[1] || "")); }
 
-function statementList(statements, tagFor) {
-  const list = el("ul", null, "statements");
-  if (!statements.length) list.appendChild(el("li", "Nothing to show.", "empty"));
-  for (const s of statements) {
-    const li = el("li", null, s.label === "unverified" ? "unverified" : "");
-    const tag = tagFor ? tagFor(s) : null;
-    if (tag) li.appendChild(tag);
-    const text = el("div");
-    if (s.label === "unverified") text.appendChild(el("span", "Unverified", "badge-unverified"));
-    text.appendChild(document.createTextNode(s.text));
-    text.append(...citeButtons(s.citations));
-    li.appendChild(text);
-    for (const issue of s.issues || []) li.appendChild(el("div", issue, "issue"));
-    list.appendChild(li);
+function statementSources(st) { return (st.citations || []).map((c) => S.sourceIndex[sourceKey(c)]).filter(Boolean); }
+
+function proseItem(st, notes, tag) {  // one statement as plain reading text; "Unverified" stays visible, its reason opens on request
+  const item = el("div", null, `prose-item${st.label === "unverified" ? " unverified" : ""}`);
+  if (tag) item.appendChild(el("div", tag, "prose-tag"));
+  const p = el("p");
+  if (st.label === "unverified") p.appendChild(el("span", "Unverified", "badge-unverified"));
+  p.appendChild(document.createTextNode(st.text));
+  p.appendChild(notes.mark(statementSources(st)));
+  item.appendChild(p);
+  if (st.label === "unverified" && (st.issues || []).length) {
+    const why = el("details", null, "why");
+    why.appendChild(el("summary", "Why unverified?"));
+    for (const issue of st.issues) why.appendChild(el("div", issue, "issue"));
+    item.appendChild(why);
   }
+  return item;
+}
+
+function statementList(statements, notes, tagFor) {
+  const list = el("div", null, "prose");
+  if (!statements.length) list.appendChild(el("p", "Nothing to show.", "empty"));
+  for (const st of statements) list.appendChild(proseItem(st, notes, tagFor ? tagFor(st) : null));
   return list;
 }
 
-function basedOnTag(s) {
-  const tag = el("div", null, "statement-tag");
-  for (const origin of s.based_on || []) {
-    tag.appendChild(el("span", origin, `pill ${agentClass(origin)}`));
-    tag.appendChild(document.createTextNode(" "));
+const TOPICS = [["business", "What the company does"], ["results", "Results"], ["outlook", "Outlook"], ["risks", "Risks"]];
+
+function byTopic(statements, notes) {  // Agent 1's statements under headings, when the model gave each a topic
+  if (!statements.some((st) => st.topic)) return statementList(statements, notes);
+  const box = el("div");
+  const known = TOPICS.map(([key]) => key);
+  for (const [key, title] of [...TOPICS, ["other", "Other"]]) {
+    const chosen = statements.filter((st) => (key === "other" ? !known.includes(st.topic) : st.topic === key));
+    if (!chosen.length) continue;
+    box.appendChild(el("h3", title, "prose-heading"));
+    box.appendChild(statementList(chosen, notes));
   }
-  return tag;
+  return box;
 }
+
+function basedOnTag(st) { return (st.based_on || []).length ? `Based on ${st.based_on.join(" · ")}` : null; }
 
 function renderDashboard() {
   const r = S.report;
@@ -601,84 +629,374 @@ function renderDashboard() {
 }
 
 function renderMetrics() {
-  const { rows } = keyFigureRows();
+  const cmp = comparisonsView();
   const results = Object.fromEntries(S.report.agent1.indicators.current.map((x) => [x.name, x]));
   $("metrics").replaceChildren(...METRICS.map((name) => {
-    const row = rows[name];
     const result = results[name];
+    const cells = (result && cmp.cells[result.indicator]) || {};
     const box = el("div", null, "card metric");
     box.appendChild(el("div", name, "metric-name"));
-    box.appendChild(el("div", row ? row[1] : "—", "metric-value"));
-    if (!result) box.appendChild(el("div", "Not chosen for this analysis", "metric-sub"));
+    box.appendChild(el("div", cells.value || (result ? "—" : "—"), "metric-value"));
     const sub = el("div", null, "metric-sub");
-    if (row && row[2] !== "—") sub.appendChild(document.createTextNode(`Peer median ${row[2]} · `));
-    if (result) sub.appendChild(statusPill(result.status));
+    if (!result) sub.appendChild(document.createTextNode("Not chosen for this analysis"));
+    else {
+      if (cells.peer_median && cells.peer_median !== "—") {
+        sub.appendChild(el("span", `Peer median ${cells.peer_median}`, "nowrap"));
+        sub.appendChild(document.createTextNode(" · "));
+        sub.appendChild(el("span", cells.difference, "nowrap"));
+      }
+      else sub.appendChild(document.createTextNode("No peer median"));
+      if (result.status !== "calculated") sub.appendChild(statusPill(result.status));
+    }
     box.appendChild(sub);
     return box;
   }));
 }
 
 function renderOverviewTab() {
-  const a3 = S.report.agent3;
+  const r = S.report, a3 = r.agent3, cmp = comparisonsView();
   const overview = card("Overview", "agent-3", "Agent 3");
-  overview.appendChild(statementList(a3.overview, basedOnTag));
+  const notes = footnotes();
+  overview.appendChild(statementList(a3.overview, notes, basedOnTag));
+  overview.appendChild(notes.box());
+
+  const numbers = card("What the numbers show", "agent-1", "Agent 1 · calculated in Python");
+  const numberNotes = footnotes();
+  const list = el("dl", null, "numbers-summary");
+  for (const g of cmp.groups) {
+    const lead = g.lines.filter((l) => l.kind === "summary");
+    const first = g.lines.find((l) => l.kind !== "summary" && l.kind !== "trend");
+    const chosen = [...lead, ...(first ? [first] : [])];
+    if (!chosen.length) continue;
+    list.appendChild(el("dt", g.group));
+    const dd = el("dd");
+    dd.appendChild(sentences(chosen, numberNotes));
+    list.appendChild(dd);
+  }
+  if (list.children.length) {
+    numbers.appendChild(list);
+    const more = button("See every comparison under Financials & peers →", () => activateTab("financials"), "link-button");
+    numbers.appendChild(more);
+    numbers.appendChild(numberNotes.box());
+  } else numbers.appendChild(el("p", "No comparisons are available for this analysis.", "empty"));
+
   const risks = card("Risks", "agent-3", "Agent 3");
-  risks.appendChild(statementList(a3.risks, basedOnTag));
-  $("tab-overview").replaceChildren(overview, risks);
+  const riskNotes = footnotes();
+  risks.appendChild(statementList(a3.risks, riskNotes, basedOnTag));
+  risks.appendChild(riskNotes.box());
+  $("tab-overview").replaceChildren(overview, numbers, risks);
+}
+
+// ---------- footnotes: small numbers by the data, one expandable "Sources" box per card ----------
+
+function docKey(s) {  // sources from the same document share one footnote number
+  const c = s.citation;
+  if (s.type === "price") return `price|${c.publisher}`;
+  if (s.type === "calculated") return s.key;
+  return `doc|${c.doc_id}`;
+}
+
+function shortWhere(s) {
+  const c = s.citation;
+  if (s.type === "price") return `close ${c.date}`;
+  if (c.page == null && c.section) return c.section;
+  return sourceWhere(s);
+}
+
+function footnotes() {
+  const entries = [];
+  const index = {};
+  const add = (s) => {
+    const key = docKey(s);
+    if (!index[key]) {
+      index[key] = { n: entries.length + 1, title: s.type === "price" ? `${s.citation.publisher}: closing prices` : sourceTitle(s),
+        url: s.citation.url, sources: [] };
+      entries.push(index[key]);
+    }
+    if (!index[key].sources.includes(s)) index[key].sources.push(s);
+    return index[key];
+  };
+  return {
+    mark(sources) {
+      const found = [...new Set((sources || []).filter(Boolean).map(add))].sort((a, b) => a.n - b.n);
+      const runs = [];  // consecutive numbers are shown as one range, "1–4", to keep the tables quiet
+      for (const e of found) {
+        const last = runs[runs.length - 1];
+        if (last && last[last.length - 1].n === e.n - 1) last.push(e); else runs.push([e]);
+      }
+      const sup = el("sup", null, "fn");
+      for (const run of runs) {
+        const b = el("button", run.length > 2 ? `${run[0].n}–${run[run.length - 1].n}` : run.map((e) => e.n).join(" "), "fn-link");
+        b.type = "button";
+        b.title = run.map((e) => e.title).join("; ");
+        b.addEventListener("click", (event) => { event.stopPropagation(); if (run.length === 1) openFootnote(run[0]); else openFootnotes(run); });
+        sup.appendChild(b);
+      }
+      return sup;
+    },
+    box() {
+      if (!entries.length) return el("span");
+      const details = el("details", null, "sources-box");
+      details.appendChild(el("summary", `Sources (${entries.length})`));
+      const list = el("ol");
+      for (const e of entries) {
+        const li = el("li");
+        li.appendChild(e.url && /^https?:\/\//.test(e.url) ? link(e.title, e.url) : document.createTextNode(e.title));
+        li.appendChild(el("span", ` · ${[...new Set(e.sources.map(shortWhere))].join(", ")}`, "hint"));
+        list.appendChild(li);
+      }
+      details.appendChild(list);
+      return details;
+    },
+  };
+}
+
+function openFootnotes(run) {
+  $("modal-title").textContent = `Sources ${run[0].n}–${run[run.length - 1].n}`;
+  const list = el("ol", null, "plain-list");
+  list.start = run[0].n;
+  for (const e of run) {
+    const li = el("li");
+    li.appendChild(button(e.title, () => openFootnote(e), "cite"));
+    li.appendChild(el("span", ` · ${[...new Set(e.sources.map(shortWhere))].join(", ")}`, "hint"));
+    list.appendChild(li);
+  }
+  $("modal-body").replaceChildren(list);
+  $("modal").hidden = false;
+}
+
+function openFootnote(e) {
+  if (e.sources.length === 1) { openSource(e.sources[0]); return; }
+  $("modal-title").textContent = e.title;
+  const body = $("modal-body");
+  body.replaceChildren();
+  if (e.url && /^https?:\/\//.test(e.url)) body.appendChild(el("p")).appendChild(link(e.url, e.url));
+  const list = el("ul", null, "plain-list");
+  for (const s of e.sources) {
+    const li = el("li");
+    li.appendChild(button(sourceWhere(s), () => openSource(s), "cite"));
+    list.appendChild(li);
+  }
+  body.appendChild(list);
+  $("modal").hidden = false;
+}
+
+function resultSources(indicator, period) {  // the sources of the figures a calculated result was built from
+  const ind = S.report.agent1.indicators;
+  const r = [...ind.current, ...Object.values(ind.history).flat()].find((x) => x.indicator === indicator && (!period || x.period === period));
+  const out = [];
+  for (const input of (r && r.inputs) || []) {
+    for (const c of input.sources || []) {
+      const s = addSource(c, `Key figure: ${r.name} (${input.name})`);
+      if (s && !out.includes(s)) out.push(s);
+    }
+  }
+  return out;
+}
+
+// ---------- financials: one card per topic, comparison lines first, compact table, details on click ----------
+
+const FIN_GROUPS = ["Valuation", "Profitability", "Debt and liquidity", "Cash flow and dividends", "Growth", "Per share and market"];
+const KEY_HISTORY = ["Revenue growth", "Net profit margin", "Common ROE", "EBITDA margin", "FCF margin", "Net debt/EBITDA", "Current ratio"];
+
+function comparisonsView() { return (S.view && S.view.comparisons) || { groups: [], by_indicator: {}, cells: {}, peers: [] }; }
+
+function lineSources(line) {
+  return line.cites.filter((c) => c.period !== "peer median").flatMap((c) => resultSources(c.indicator, c.period));
+}
+
+function sentences(lines, notes, className) {  // comparison lines as one flowing paragraph, each sentence with its footnotes
+  const p = el("p", null, className);
+  for (const line of lines) {
+    p.appendChild(document.createTextNode(line.text));
+    p.appendChild(notes.mark(lineSources(line)));
+    p.appendChild(document.createTextNode(" "));
+  }
+  return p;
+}
+
+const FINDING_SECTIONS = [["Against the peers", ["peers"]], ["Against its own history", ["history", "peer history"]], ["Over time", ["trend"]]];
+
+function findingsPanel(lines, notes, title = "What the comparison shows") {  // shown after its table: the numbers first, then what they show
+  const panel = el("div", null, "findings-panel");
+  panel.appendChild(el("div", title, "findings-head"));
+  const lead = lines.filter((l) => l.kind === "summary");
+  if (lead.length) panel.appendChild(sentences(lead, notes, "findings-lead"));
+  for (const [label, kinds] of FINDING_SECTIONS) {
+    const chosen = lines.filter((l) => kinds.includes(l.kind));
+    if (!chosen.length) continue;
+    const section = el("div", null, "findings-section");
+    section.appendChild(el("div", label, "findings-label"));
+    section.appendChild(sentences(chosen, notes));
+    panel.appendChild(section);
+  }
+  return panel;
 }
 
 function renderFinancialsTab() {
-  const r = S.report;
-  const panel = $("tab-financials");
+  const r = S.report, cmp = comparisonsView();
+  const groupOf = Object.fromEntries(((S.config && S.config.indicators) || []).map((x) => [x.id, x.group]));
+  const parts = [peersCard(r)];
+  for (const group of FIN_GROUPS) {
+    const results = r.agent1.indicators.current.filter((x) => groupOf[x.indicator] === group);
+    if (results.length) parts.push(groupCard(group, results, cmp));
+  }
+  const ownHistory = historyAgainstPeersCard(cmp);
+  if (ownHistory) parts.push(ownHistory);
+  parts.push(byYearCard());
   const summary = card("What the reports say", "agent-1", "Agent 1");
-  summary.appendChild(statementList(r.agent1.summary));
+  const notes = footnotes();
+  summary.appendChild(byTopic(r.agent1.summary, notes));
+  summary.appendChild(notes.box());
+  parts.push(summary);
+  $("tab-financials").replaceChildren(...parts);
+}
 
-  const figures = card("Key figures", "agent-1", "Agent 1 · calculated in Python");
-  const { table, rows } = keyFigureRows();
+function peersCard(r) {
+  const box = card("Compared with", "agent-1", "Agent 1");
+  const chips = el("div", null, "peer-chips");
+  for (const p of r.peers.peers) {
+    const chip = el("span", null, "peer-chip");
+    chip.appendChild(el("strong", p.ticker));
+    chip.appendChild(document.createTextNode(` ${p.name}`));
+    chips.appendChild(chip);
+  }
+  if (!r.peers.peers.length) chips.appendChild(el("p", "No suitable peers: the company is compared with its own history only.", "empty"));
+  box.appendChild(chips);
+  if (r.peers.peers.length || r.peers.excluded.length) {
+    const why = el("details", null, "more");
+    why.appendChild(el("summary", "Why these peers"));
+    const list = el("ul", null, "plain-list");
+    for (const p of r.peers.peers) {
+      const li = el("li");
+      li.appendChild(el("strong", `${p.ticker}: `));
+      li.appendChild(el("span", p.label, "pill"));
+      li.appendChild(el("div", p.explanation, "hint"));
+      list.appendChild(li);
+    }
+    for (const e of r.peers.excluded) list.appendChild(el("li", `Not used: ${e.ticker}. ${e.reason}`, "hint"));
+    why.appendChild(list);
+    box.appendChild(why);
+  }
+  return box;
+}
+
+function groupCard(group, results, cmp) {
+  const box = card(group, "agent-1", "Agent 1 · calculated in Python");
+  const notes = footnotes();
+  const summary = (cmp.groups.find((g) => g.group === group) || {}).lines || [];
+  const { rows: formatted } = keyFigureRows();
   const wrap = el("div", null, "table-wrap");
-  const t = el("table");
+  const t = el("table", null, "compact");
   const head = el("tr");
-  for (const h of ["Indicator", "Value", "Peer median", "Compared with peers", "Status", "Notes", "Sources"]) head.appendChild(el("th", h));
+  for (const h of ["Indicator", "Value", "Peer median", "Difference", "Own history"]) head.appendChild(el("th", h));
   t.appendChild(head);
-  for (const result of r.agent1.indicators.current) {
-    const row = rows[result.name] || [result.name, "—", "—", "—", ""];
+  for (const result of results) {
+    const cells = cmp.cells[result.indicator] || {};
+    const tr = el("tr", null, "row-main");
+    const name = el("td");
+    name.appendChild(el("span", "▸", "caret"));
+    name.appendChild(document.createTextNode(result.name));
+    tr.appendChild(name);
+    const value = el("td", null, "num");
+    value.appendChild(document.createTextNode(cells.value || "—"));
+    if (result.status !== "calculated") value.appendChild(statusPill(result.status));
+    value.appendChild(notes.mark(S.figureSources[result.indicator]));
+    tr.appendChild(value);
+    tr.appendChild(el("td", cells.peer_median || "—", "num"));
+    tr.appendChild(el("td", cells.difference || "—", "num"));
+    tr.appendChild(el("td", cells.own_history || "—", "num muted"));
+    const more = el("tr", null, "row-details");
+    more.hidden = true;
+    const cell = el("td");
+    cell.colSpan = 5;
+    cell.appendChild(details(result, cells, (formatted[result.name] || [])[4], cmp, notes));
+    more.appendChild(cell);
+    tr.addEventListener("click", () => { more.hidden = !more.hidden; tr.classList.toggle("open", !more.hidden); });
+    t.append(tr, more);
+  }
+  wrap.appendChild(t);
+  box.appendChild(wrap);
+  box.appendChild(el("p", "Click a row for its formula, notes, each peer's value and its sources. Differences describe the gap to the peer "
+    + "median (pp = percentage points); they are not valuation verdicts.", "hint"));
+  if (summary.length) box.appendChild(findingsPanel(summary, notes));
+  box.appendChild(notes.box());
+  return box;
+}
+
+function details(result, cells, statusText, cmp, notes) {
+  const box = el("div", null, "details");
+  const lines = cmp.by_indicator[result.indicator] || [];
+  if (lines.length) box.appendChild(sentences(lines, notes, "details-text"));
+  const peers = Object.entries(cells.peers || {});
+  if (peers.length) {
+    const each = el("div", null, "each-peer");
+    each.appendChild(el("span", "Each peer: ", "label"));
+    peers.forEach(([ticker, value], i) => {
+      if (i) each.appendChild(document.createTextNode(" · "));
+      each.appendChild(el("strong", ticker));
+      each.appendChild(document.createTextNode(` ${value}`));
+    });
+    box.appendChild(each);
+  }
+  const facts = el("dl", null, "facts");
+  const add = (term, text) => { if (text) { facts.appendChild(el("dt", term)); facts.appendChild(el("dd", text)); } };
+  add("Status and notes", statusText);
+  add("Formula", result.formula);
+  add("Period", result.period);
+  box.appendChild(facts);
+  box.appendChild(button("All sources of this figure", () => openFigureSources(result), "cite"));
+  return box;
+}
+
+function historyAgainstPeersCard(cmp) {
+  const bases = Object.keys(cmp.cells).filter((id) => id.endsWith("_hist_median"));
+  if (!bases.length) return null;
+  const current = Object.fromEntries(S.report.agent1.indicators.current.map((x) => [x.indicator, x]));
+  const horizon = S.report.agent1.indicators.horizon_years || 5;
+  const box = card(`Own ${horizon}-year history against the peers' own history`, "agent-1", "Agent 1 · calculated in Python");
+  const notes = footnotes();
+  const lines = (cmp.groups.find((g) => g.group === "Historical comparison") || {}).lines || [];
+  const peers = cmp.peers || [];
+  const wrap = el("div", null, "table-wrap");
+  const t = el("table", null, "compact");
+  const head = el("tr");
+  for (const h of ["Median of the multiple", S.report.company.ticker, ...peers, "Peer median"]) head.appendChild(el("th", h));
+  t.appendChild(head);
+  for (const id of bases) {
+    const cells = cmp.cells[id];
     const tr = el("tr");
-    tr.appendChild(el("td", result.name));
-    tr.appendChild(el("td", row[1], "num"));
-    tr.appendChild(el("td", row[2], "num"));
-    tr.appendChild(el("td", row[3], "num"));
-    const status = el("td");
-    status.appendChild(statusPill(result.status));
-    tr.appendChild(status);
-    tr.appendChild(el("td", row[4].replace(/^[a-z ]+\.\s*/, ""), "note"));
-    const sources = el("td");
-    sources.appendChild(button("Sources", () => openFigureSources(result), "cite"));
-    tr.appendChild(sources);
+    tr.appendChild(el("td", (current[id] || {}).name || id));
+    const own = el("td", null, "num strong");
+    own.appendChild(document.createTextNode(cells.value));
+    own.appendChild(notes.mark(S.figureSources[id]));
+    tr.appendChild(own);
+    for (const p of peers) tr.appendChild(el("td", (cells.peers || {})[p] || "—", "num"));
+    tr.appendChild(el("td", cells.peer_median, "num"));
     t.appendChild(tr);
   }
   wrap.appendChild(t);
-  figures.appendChild(wrap);
-  for (const note of (table && table.notes) || []) figures.appendChild(el("p", note, "hint"));
+  box.appendChild(wrap);
+  box.appendChild(el("p", "Each value is the median of the multiple at the company's or peer's own past fiscal year ends, each from the "
+    + "price and the reports published by that date.", "hint"));
+  if (lines.length) box.appendChild(findingsPanel(lines, notes));
+  box.appendChild(notes.box());
+  return box;
+}
 
-  const peers = card("Peers", "agent-1", "Agent 1");
-  const peerList = el("ul", null, "plain-list");
-  for (const p of r.peers.peers) {
-    const li = el("li");
-    li.appendChild(el("strong", `${p.name} (${p.ticker}) `));
-    li.appendChild(el("span", p.label, "pill"));
-    li.appendChild(el("div", p.explanation, "hint"));
-    peerList.appendChild(li);
-  }
-  if (!r.peers.peers.length) peerList.appendChild(el("li", "No suitable peers: the company is compared with its own history only."));
-  peers.appendChild(peerList);
-  for (const e of r.peers.excluded) peers.appendChild(el("p", `Not used as a peer: ${e.ticker}. ${e.reason}`, "hint"));
-
-  const history = card("Key figures by fiscal year", "agent-1", "Agent 1");
-  history.appendChild(chart());
+function byYearCard() {
+  const box = card("By fiscal year", "agent-1", "Agent 1");
+  box.appendChild(chart());
   const hist = historyTable();
-  if (hist) history.appendChild(simpleTable(hist));
-
-  panel.replaceChildren(summary, figures, peers, history);
+  if (hist) {
+    const key = { ...hist, rows: hist.rows.filter((row) => KEY_HISTORY.includes(row[0])), notes: [] };
+    if (key.rows.length) box.appendChild(simpleTable(key));
+    const all = el("details", null, "more");
+    all.appendChild(el("summary", `Show all ${hist.rows.length} indicators by fiscal year`));
+    all.appendChild(simpleTable(hist));
+    box.appendChild(all);
+  }
+  return box;
 }
 
 function simpleTable(block) {
@@ -1122,6 +1440,7 @@ function wireUp() {
   $("menu-button").addEventListener("click", () => document.body.classList.toggle("menu-open"));
   $("scrim").addEventListener("click", () => document.body.classList.remove("menu-open"));
   $("analysis-form").addEventListener("submit", runAnalysis);
+  $("new-analysis-button").addEventListener("click", resetForm);
   $("price-form").addEventListener("submit", checkPrice);
   $("source-search").addEventListener("input", renderSources);
   document.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("click", () => activateTab(b.dataset.tab)));

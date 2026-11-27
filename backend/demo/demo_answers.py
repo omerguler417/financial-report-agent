@@ -40,19 +40,22 @@ def summarise_reports(data: dict) -> dict:
     cur, prev = f["ytd"]["YTD Q3 2026"]["revenue"], f["ytd"]["YTD Q3 2025"]["revenue"]
     statements = [
         {"text": f"{c['name']} is an integrated oil and gas company with {', '.join(c['segments'])} segments; it earns {regions}.",
-         "citations": [{"doc_id": annual, "page": 2}]},
-        {"text": f"Revenue was {f['annual']['FY2025']['revenue']:,.1f} million in 2025.", "citations": [{"doc_id": annual, "page": 6}]},
-        {"text": "The annual report names commodity price volatility as the main risk to results.", "citations": [{"doc_id": annual, "page": 6}]},
+         "citations": [{"doc_id": annual, "page": 2}], "topic": "business"},
+        {"text": f"Revenue was {f['annual']['FY2025']['revenue']:,.1f} million in 2025.", "citations": [{"doc_id": annual, "page": 6}],
+         "topic": "results"},
+        {"text": "The annual report names commodity price volatility as the main risk to results.", "citations": [{"doc_id": annual, "page": 6}],
+         "topic": "risks"},
         {"text": f"Revenue for the nine months ended September 30, 2026 was {cur:,.1f} million, compared with {prev:,.1f} million a year earlier.",
-         "citations": [{"doc_id": quarter, "page": 5}]},
-        {"text": "Management expects capital expenditure to remain broadly in line with the prior year.", "citations": [{"doc_id": quarter, "page": 5}]},
+         "citations": [{"doc_id": quarter, "page": 5}], "topic": "results"},
+        {"text": "Management expects capital expenditure to remain broadly in line with the prior year.", "citations": [{"doc_id": quarter, "page": 5}],
+         "topic": "outlook"},
     ]
     roe = _indicator(data, "roe_common", "TTM to Q3 2026")
     if roe and roe["value"] not in (None, "—"):
         statements.append({"text": f"Return on common equity was {roe['value']} over the twelve months to September 2026.",
-                           "citations": [{"indicator": "roe_common", "period": "TTM to Q3 2026"}]})
+                           "citations": [{"indicator": "roe_common", "period": "TTM to Q3 2026"}], "topic": "results"})
     # deliberate mistake: Python calculated about 6% for FY2025
-    statements.append({"text": "Revenue grew 9% in 2025.", "citations": [{"indicator": "revenue_growth", "period": "FY2025"}]})
+    statements.append({"text": "Revenue grew 9% in 2025.", "citations": [{"indicator": "revenue_growth", "period": "FY2025"}], "topic": "results"})
     return {"statements": statements}
 
 

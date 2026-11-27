@@ -95,7 +95,8 @@ def build(report: dict) -> dict:
     title = f"Financial analysis: {company['name']} ({company['ticker']})"
     blocks.append({"type": "heading", "level": 1, "text": title})
     blocks.append({"type": "paragraph", "text": f"Analysis date {report['analysis_date']} · {report['mode']} mode · current period "
-                                                f"{indicators['current_period']} · indicator definitions {indicators['definition_version']}"})
+                                                f"{indicators['current_period']} · horizon {indicators.get('horizon_years', 5)} fiscal years · "
+                                                f"indicator definitions {indicators['definition_version']}"})
 
     section("Overview")
     blocks.append({"type": "statements", "items": [_statement(s, "Based on " + ", ".join(s.get("based_on", []))) for s in a3["overview"]]})
@@ -121,6 +122,9 @@ def build(report: dict) -> dict:
                              _number(comparison[r["indicator"]]["peer_median"], r["unit"]) if r["indicator"] in comparison else "—",
                              _comparison(comparison.get(r["indicator"])), _status(r)] for r in indicators["current"]],
                    "notes": [f"Period: {indicators['current_period']}. " + DISCOUNT_NOTE]})
+    from backend import comparisons
+    for group in comparisons.build(report)["groups"]:  # written by Python from the results above, never by the text model
+        blocks.append({"type": "list", "title": f"What the comparison shows: {group['group']}", "items": [line["text"] for line in group["lines"]]})
     blocks.append({"type": "list", "title": "Sources of the key figures",
                    "items": [f"{r['name']}: {_input_sources(r)}" for r in indicators["current"]]})
 
@@ -172,4 +176,5 @@ def build(report: dict) -> dict:
     section("Limitations")
     blocks.append({"type": "list", "items": a3["limitations"] + report.get("notes", [])})
 
-    return {"title": title, "demo_label": report.get("demo_label"), "blocks": blocks}
+    from backend import comparisons
+    return {"title": title, "demo_label": report.get("demo_label"), "blocks": blocks, "comparisons": comparisons.build(report)}

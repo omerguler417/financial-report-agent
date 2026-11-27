@@ -6,11 +6,12 @@ import statistics
 from dataclasses import asdict, dataclass, field
 from typing import Callable
 
-DEFINITION_VERSION = "v1.0"
+DEFINITION_VERSION = "v1.1"
 STATUSES = ("calculated", "reported_only", "estimated", "missing", "not_applicable", "not_meaningful", "not_comparable")  # v1.0 section 3
 FLOW_FIELDS = {"revenue", "ebit", "depreciation_amortisation", "interest_expense", "pretax_income", "income_tax", "net_income_group",
                "nci_share_of_income", "net_income_common", "cfo_reported", "capex", "dividends_paid_common", "cost_of_sales",
-               "interest_paid_in_cfo", "interest_paid_outside_cfo", "lease_principal_outside_cfo", "dividends_paid_in_cfo", "dividends_per_share"}
+               "interest_paid_in_cfo", "interest_paid_outside_cfo", "lease_principal_outside_cfo", "dividends_paid_in_cfo", "dividends_per_share",
+               "depreciation_amortisation_own"}  # the company's own D&A element, used only as a complete replacement (see _own_d_and_a)
 # Reported for each period but never added up into twelve months (v1.0: no blind adding of per-share figures on different share bases).
 PERIOD_ONLY_FIELDS = {"eps_basic", "eps_diluted", "weighted_shares_basic", "weighted_shares_diluted"}
 RATE_FIELDS = {"statutory_tax_rate"}
@@ -47,6 +48,8 @@ class CompanyInputs:
     price_points: dict = field(default_factory=dict)  # "end", "1m", "3m", "12m" (split-adjusted) and "year end YYYY-12-31" closes
     price_note: str = ""  # why there is no price, for example "no market-data provider is configured"
     interest_rule: str = ""  # set for US GAAP filers: interest paid is classified within operating cash flow
+    horizon_years: int = 5  # fiscal years of history chosen for the analysis: 3, 5 (default) or 10
+    source_gaps: dict = field(default_factory=dict)  # inputs the data source does not have, with the reason shown to the reader
 
 
 @dataclass
@@ -123,6 +126,7 @@ class _View:
         self.price_note = ""
         self.interest_rule = ""
         self.not_comparable: dict = {}  # flows whose parts could not be combined, with the reason
+        self.horizon = 5  # fiscal years for multi-year measures (the analysis horizon)
 
     def flow(self, name: str) -> Figure:
         if name in self.not_comparable:
@@ -217,7 +221,8 @@ def _market_cap(v: _View) -> Figure:
     shares = v.bal("shares_outstanding")
     currency, scale = v.price.unit.split()[0], shares.unit.split()[0]
     return Figure("market_cap", v.price.value * shares.value, f"{currency} {scale}", f"{v.price.period} × shares at {v.closing_label}",
-                  _sources(v.price, shares), "Price × common shares outstanding from the latest balance sheet; any other share class must be added.")
+                  _sources(v.price, shares), "Price × common shares outstanding from the latest balance sheet (or the report's cover page when "
+                  "the balance sheet gives none); any other share class must be added.")
 
 
 def _enterprise_value(v: _View) -> Figure:
@@ -390,7 +395,7 @@ def _fcf_conversion(v):
 
 def _fcf_conversion_multi_year(v):
     years = []
-    for label, view in reversed(v.annual[-5:]):  # newest first; stop at the first year with incomplete data or a gap
+    for label, view in reversed(v.annual[-v.horizon:]):  # newest first; stop at the first year with incomplete data or a gap
         try:
             fcf, ni = _fcf(view), view.flow("net_income_group")
             _check_units(fcf, ni)
@@ -408,8 +413,8 @@ def _fcf_conversion_multi_year(v):
     total_fcf.period = total_ni.period = period
     value = _ratio(total_fcf, total_ni, "Aggregate group net income is not positive, so the measure is NM.")
     note = f"Sum of FCF ÷ sum of group net income over {len(years)} years."
-    if len(years) < 5:
-        note += f" Only {len(years)} years are available, so this is a {len(years)}-year measure, not five."
+    if len(years) < v.horizon:
+        note += f" Only {len(years)} years are available, so this is a {len(years)}-year measure, not {v.horizon}."
     views = {}
     if all(f.alternative for _, f, _ in years):
         views = {"reported_basis": sum(f.alternative.value for _, f, _ in years) / total_ni.value}
@@ -438,6 +443,8 @@ def _ev_ebit(v):
 
 
 def _dividend_yield(v):
+    if "dividends_per_share" not in v.flows and "dividends_paid_common" in v.flows:
+        return _dividend_yield_estimated(v)
     dps = v.flow("dividends_per_share")
     if v.price is None:
         why = f" ({v.price_note})" if v.price_note else ""
@@ -445,6 +452,22 @@ def _dividend_yield(v):
     value = _ratio(dps, v.price, "The share price is not positive.")
     return value, [dps, v.price], ("Dividends per share paid over the period ÷ the share price. Per-share amounts are combined across "
                                    "reports, which holds only if there was no share split in the period. Forward dividends are a separate measure.")
+
+
+def _dividend_yield_estimated(v):
+    """Decided 27 November 2026: without dividends per share paid, cash dividends paid ÷ shares outstanding, labelled estimated."""
+    paid, shares = v.flow("dividends_paid_common"), v.bal("shares_outstanding")
+    if v.price is None:
+        why = f" ({v.price_note})" if v.price_note else ""
+        raise _Stop("missing", f"Missing input: share price{why}. Missing is not treated as zero.", [paid, shares])
+    _check_units(v.price)
+    if shares.value <= 0 or v.price.value <= 0:
+        raise _Stop("not_meaningful", "Shares outstanding or the share price are not positive.", [paid, shares, v.price])
+    per_share = paid.value / shares.value  # USD millions ÷ millions of shares = USD per share
+    return {"value": per_share / v.price.value, "status": "estimated", "inputs": [paid, shares, v.price], "period": v.label,
+            "note": (f"Estimated: no dividends per share paid are reported, so cash dividends paid to common shareholders "
+                     f"({paid.value:,.0f}) ÷ shares outstanding at {v.closing_label} ({shares.value:,.0f}) ≈ {per_share:.2f} per share, "
+                     "÷ the share price. The share count at the period end can differ from the counts on the payment dates.")}
 
 
 def _graham(v):
@@ -605,7 +628,7 @@ def _eps_growth(v):
 
 def _revenue_cagr(v):
     years = []
-    for label, view in reversed(v.annual[-6:]):
+    for label, view in reversed(v.annual[-(v.horizon + 1):]):
         f = view.flows.get("revenue")
         if f is None or (years and fiscal_year(years[-1][0]) - 1 != fiscal_year(label)):
             break
@@ -619,8 +642,8 @@ def _revenue_cagr(v):
     if begin.value <= 0 or end.value <= 0:
         raise _Stop("not_meaningful", "Revenue is not positive at the start or the end, so a growth rate is NM.", [begin, end])
     note = f"{n}-year CAGR from {first} to {last}."
-    if n < 5:
-        note += " A five-year CAGR needs six annual observations."
+    if n < v.horizon:
+        note += f" A {v.horizon}-year CAGR needs {v.horizon + 1} annual observations."
     return {"value": (end.value / begin.value) ** (1 / n) - 1, "inputs": [begin, end], "note": note, "period": f"{first}–{last}"}
 
 
@@ -653,10 +676,14 @@ class Spec:
     historical: bool = False  # median at past fiscal year ends, or the current value against it
 
 
-HISTORICAL = ["pe", "ps", "pb", "ev_ebitda", "p_fcf"]
+HISTORICAL = ["pe", "ps", "pb", "ev_ebitda", "p_fcf", "ev_sales", "ev_ebit"]  # EV/sales and EV/EBIT added 27 November 2026
 
-HIST_NAMES = {"pe": "P/E", "ps": "P/S", "pb": "P/B", "ev_ebitda": "EV/EBITDA", "p_fcf": "P/FCF"}
-HIST_FORMULA = "median of the multiple at the preceding five fiscal year ends, each from the price and the reports published by that date"
+HIST_NAMES = {"pe": "P/E", "ps": "P/S", "pb": "P/B", "ev_ebitda": "EV/EBITDA", "p_fcf": "P/FCF", "ev_sales": "EV/sales", "ev_ebit": "EV/EBIT"}
+HIST_NOT_FOR_FINANCIALS = ("ev_ebitda", "p_fcf", "ev_sales", "ev_ebit")  # as the multiples themselves
+HORIZONS = (3, 5, 10)  # fiscal years of history the user can choose; 5 is the default
+YEAR_WORDS = {3: "Three", 5: "Five", 10: "Ten"}
+HIST_FORMULA = ("median of the multiple at the preceding fiscal year ends in the horizon (3, 5 or 10; default 5), each from the price and "
+                "the reports published by that date")
 
 SPECS = [
     # Valuation
@@ -673,9 +700,9 @@ SPECS = [
     # Historical comparison (calculated in _historical)
     *[s for base, name in HIST_NAMES.items() for s in (
         Spec(f"{base}_hist_median", f"{name} historical median", "Historical comparison", "x", HIST_FORMULA, None, True,
-             base in ("ev_ebitda", "p_fcf"), "none", historical=True),
+             base in HIST_NOT_FOR_FINANCIALS, "peer discount", historical=True),  # v1.1: against the peers' own historical medians
         Spec(f"{base}_vs_hist", f"{name} against its historical median", "Historical comparison", "fraction",
-             f"current {name} / historical median − 1", None, True, base in ("ev_ebitda", "p_fcf"), "none", historical=True))],
+             f"current {name} / historical median − 1", None, True, base in HIST_NOT_FOR_FINANCIALS, "median only", historical=True))],
     # Debt and liquidity
     Spec("debt_equity", "Debt/equity", "Debt and liquidity", "x", "debt_inc_leases / equity_total", _debt_equity, not_for_financials=True),
     Spec("net_debt_equity", "Net debt/equity", "Debt and liquidity", "x", "net_debt / equity_total", _net_debt_equity, not_for_financials=True),
@@ -709,7 +736,7 @@ SPECS = [
     # Cash flow and dividends
     Spec("fcf_conversion", "FCF earnings conversion", "Cash flow and dividends", "fraction", "standardised FCF / net_income_group", _fcf_conversion,
          not_for_financials=True),
-    Spec("fcf_conversion_5y", "Five-year FCF earnings conversion", "Cash flow and dividends", "fraction",
+    Spec("fcf_conversion_5y", "Multi-year FCF earnings conversion", "Cash flow and dividends", "fraction",
          "sum of standardised FCF / sum of net_income_group over the same fiscal years", _fcf_conversion_multi_year, not_for_financials=True,
          multi_year=True),
     Spec("cfo_conversion", "CFO earnings conversion", "Cash flow and dividends", "fraction", "standardised CFO / net_income_group",
@@ -778,11 +805,24 @@ def _split(figures: dict) -> tuple[dict, dict]:
     return flows, balances
 
 
+def _own_d_and_a(flows: dict) -> dict:
+    """Decided 27 November 2026: when the standard D&A is missing for a period (or for any part of a twelve-month sum), the company's own
+    element is used instead, only if it exists for the whole period; standard and own figures are never mixed in one sum."""
+    own = flows.pop("depreciation_amortisation_own", None)
+    if "depreciation_amortisation" not in flows and own is not None:
+        flows["depreciation_amortisation"] = Figure("depreciation_amortisation", own.value, own.unit, own.period, own.sources,
+                                                    (own.note + " " if own.note else "") + "D&A from the company's own XBRL element (see the "
+                                                    "source tag), because no standard figure covers the whole period; it can be defined "
+                                                    "more broadly than the standard figure used for other periods.")
+    return flows
+
+
 def _annual_views(c: CompanyInputs) -> list:
     years = sorted((p for p in c.periods if fiscal_year(p)), key=fiscal_year)
     views = []
     for i, fy in enumerate(years):
         flows, closing = _split(c.periods[fy])
+        flows = _own_d_and_a(dict(flows))
         prev = years[i - 1] if i and fiscal_year(years[i - 1]) == fiscal_year(fy) - 1 else None
         opening = _split(c.periods[prev])[1] if prev else None
         growth = None
@@ -823,6 +863,7 @@ def _ttm_view(c: CompanyInputs, fy_label: str, cur_label: str, prior_label: str,
                 flows[name] = _ttm(fy[name], cur[name], prior[name], label)
             except _Stop as stop:
                 not_comparable[name] = stop
+    flows = _own_d_and_a(flows)
     closing, opening = _split(cur)[1], _split(prior)[1] or None
     growth = (cur["revenue"], prior["revenue"]) if "revenue" in cur and "revenue" in prior else None
     view = _View(label, flows, closing, f"{cur_label} period end", opening, f"{prior_label} period end", growth, price,
@@ -855,16 +896,22 @@ def _year_end_view(c: CompanyInputs, key: str) -> _View | None:
 
 
 def _historical(c: CompanyInputs, current: dict) -> dict:
-    """Median of each multiple at the preceding five fiscal year ends (v1.0), and the current multiple against it."""
-    keys = sorted(k for k in c.price_points if k.startswith("year end "))[-5:]
+    """Median of each multiple at the preceding fiscal year ends in the horizon (v1.1), and the current multiple against it."""
+    n = c.horizon_years
+    keys = sorted(k for k in c.price_points if k.startswith("year end "))[-n:]
     observations = {base: [] for base in HISTORICAL}
+    gaps = {base: [] for base in HISTORICAL}  # (year end, why no value), shown when the median is omitted
     for key in keys:
         view = _year_end_view(c, key)
-        if view is None:
-            continue
         day = key.removeprefix("year end ")
+        if view is None:
+            for base in HISTORICAL:
+                gaps[base].append((day, "no annual and interim reports covering the twelve months to that date"))
+            continue
         for base in HISTORICAL:
             r = _run(SPECS_BY_ID[base], view, c.business_model)
+            if not (r.status == "calculated" and not r.exclude_from_peer_median and r.value > 0):
+                gaps[base].append((day, r.note.split(". Missing is not treated as zero")[0].rstrip(".") if r.note else r.status.replace("_", " ")))
             if r.status == "calculated" and not r.exclude_from_peer_median and r.value > 0:
                 sources = []
                 for item in r.inputs:
@@ -883,15 +930,22 @@ def _historical(c: CompanyInputs, current: dict) -> dict:
         inputs = [o.as_input() for o in found]
         if len(found) < 3:
             note = (f"Only {len(found)} meaningful year-end value{'s' if len(found) != 1 else ''}; with fewer than three the historical "
-                    "comparison is omitted (v1.0).")
+                    "comparison is omitted (v1.1).")
+            if gaps[base]:
+                note += " " + " ".join(f"At {day}: {why}." for day, why in sorted(gaps[base])[-3:])
             out[median_spec.id] = Result(median_spec.id, median_spec.name, period, "missing", None, "x", median_spec.formula, inputs, note)
             out[against_spec.id] = Result(against_spec.id, against_spec.name, period, "missing", None, "fraction", against_spec.formula, [], note)
             continue
         median = statistics.median(o.value for o in found)
-        note = (f"Median of {len(found)} of 5 preceding fiscal year ends ({', '.join(o.period for o in found)}), each from the price and the "
+        note = (f"Median of {len(found)} of {n} preceding fiscal year ends ({', '.join(o.period for o in found)}), each from the price and the "
                 "reports published by that date.")
-        if len(found) < 5:
-            note += f" Actual coverage is {len(found)} year ends, not five."
+        if len(found) < n:
+            note += f" Actual coverage is {len(found)} year ends, not {n}."
+        own = [o.period for o in found if any(":" in str(src.get("tag", "")) and not str(src["tag"]).startswith(("us-gaap:", "dei:"))
+                                              for src in o.sources)]
+        if own:
+            note += (f" At {', '.join(own)} a figure comes from the company's own XBRL element (see the sources), which can be defined "
+                     "more broadly than the standard figure used at the other year ends.")
         out[median_spec.id] = Result(median_spec.id, median_spec.name, period, "calculated", median, "x", median_spec.formula, inputs, note)
         now = current.get(base)
         if now is None or now.status != "calculated":
@@ -919,15 +973,26 @@ def analyse(c: CompanyInputs) -> dict:
     history = {fy: [_run(s, v, c.business_model) for s in SPECS if not (s.needs_price or s.multi_year or s.historical)] for fy, v in annual}
     current_view = _current_view(c, annual)
     current_view.price_note = c.price_note
+    current_view.horizon = c.horizon_years
     current = {s.id: _run(s, current_view, c.business_model) for s in SPECS if not s.historical}
+    conversion = current["fcf_conversion_5y"]  # named for the years actually used: the horizon, or fewer when data is missing
+    used = c.horizon_years
+    if conversion.status == "calculated" and (m := re.fullmatch(r"FY(\d{4})–FY(\d{4})", conversion.period)):
+        used = int(m.group(2)) - int(m.group(1)) + 1
+    conversion.name = f"{YEAR_WORDS.get(used, used)}-year FCF earnings conversion"
     current.update(_historical(c, current))
+    for r in current.values():  # say why an input is missing when the data source never has it
+        for name, reason in c.source_gaps.items():
+            if r.status == "missing" and f"Missing input: {name}" in r.note and reason not in r.note:
+                r.note += " " + reason
     notes = [c.demo_label] if c.demo_label else []
     if c.business_model in FINANCIAL_MODELS:
         notes.append(f"Treated as a {c.business_model}: industrial cash-flow, EBITDA, debt and liquidity measures are not applicable (v1.0 section 8).")
     if not (c.ytd_current and c.ytd_prior):
         notes.append(f"No interim reports: current values use {c.latest_fy}.")
     return {"company": c.name, "demo": bool(c.demo_label), "definition_version": DEFINITION_VERSION, "business_model": c.business_model,
-            "current_period": current_view.label, "current": [current[s.id] for s in SPECS], "history": history, "notes": notes}
+            "current_period": current_view.label, "horizon_years": c.horizon_years, "current": [current[s.id] for s in SPECS],
+            "history": history, "notes": notes}
 
 
 def compare_with_peers(target: dict, peers: dict) -> list[dict]:
@@ -951,9 +1016,14 @@ def compare_with_peers(target: dict, peers: dict) -> list[dict]:
         if median is not None and r.status == "calculated" and not r.exclude_from_peer_median:
             if spec.peer_comparison == "peer discount" and median > 0:
                 comparison, kind = 1 - r.value / median, "peer discount (1 − company ÷ peer median; positive means below the median)"
-            elif spec.peer_comparison == "percentage points":
-                comparison, kind = r.value - median, "percentage-point difference"
+            elif spec.peer_comparison == "percentage points" or (spec.peer_comparison == "median only" and spec.unit == "fraction"):
+                comparison, kind = r.value - median, "percentage-point difference"  # v1.1: every percentage measure
+        each = {}  # every peer's own result, so each peer can be compared with the company one by one
+        for t, a in peers.items():
+            p = next((x for x in a["current"] if x.indicator == r.indicator), None)
+            if p is not None:
+                each[t] = {"value": p.value, "status": p.status, "period": p.period, "in_median": (t, p) in used}
         rows.append({"indicator": r.indicator, "name": r.name, "company_value": r.value, "company_status": r.status, "unit": r.unit,
                      "peer_median": median, "peer_count": len(values), "peers_used": [t for t, _ in used], "comparison": comparison,
-                     "comparison_type": kind, "note": " ".join(notes)})
+                     "comparison_type": kind, "note": " ".join(notes), "peer_values": each})
     return rows

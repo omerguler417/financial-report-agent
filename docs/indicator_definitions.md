@@ -1,6 +1,6 @@
 # Global Company Analysis: Indicator Definitions and Calculation Rules
 
-Version 1.0 — 18 November 2026. Provided by the project team. This document is the authoritative source for indicator definitions and calculation rules; where `docs/indicator_spec.md` differs, this document wins (see "Changes introduced by Indicator Definitions v1.0" in that file).
+Version 1.1 — 27 November 2026 (version 1.0: 18 November 2026). Provided by the project team. Version 1.1 changes two things: the history horizon (the user chooses 3, 5 (default) or 10 fiscal years, and the multi-year measures follow it: section 3, and the rows for multi-year FCF earnings conversion, the historical multiple median and revenue CAGR), peer comparisons in percentage points for every percentage measure, and peer comparisons of the historical multiple medians (section 10). This document is the authoritative source for indicator definitions and calculation rules; where `docs/indicator_spec.md` differs, this document wins (see "Changes introduced by Indicator Definitions v1.0" in that file).
 
 ## 1. Implementation prompt
 
@@ -61,7 +61,7 @@ Extract financial amounts directly from statements and notes. Do not reverse-eng
 - TTM equals the latest four non-overlapping quarters, or latest full fiscal year + current year-to-date period − comparable prior year-to-date period. Apply the same twelve-month principle to half-year reporters. Explain 52/53-week years, year-end changes and incomplete periods.
 - Do not blindly add or subtract cumulative per-share figures with different share bases. Use appropriately adjusted published quarterly EPS or a valid numerator/denominator reconstruction.
 - Average balance-sheet amount means the average of the opening and closing balances covering the same twelve-month period. A consistent quarterly average may be used when available and seasonality matters; identify the method. If opening data is unavailable, do not invent an average. Label any closing-balance approximation separately.
-- Target five completed fiscal years plus current TTM. Three years is a reasonable default for a basic trend; use less history when necessary and disclose the limitation. A five-year measure requires five actual years of aligned data.
+- The horizon is chosen per analysis: 3, 5 (default) or 10 completed fiscal years plus current TTM. It sets the history shown and the window of the multi-year measures. Use less history when necessary and disclose the limitation. An n-year measure requires n actual years of aligned data.
 - Save the analysis date. A historical as-of analysis must exclude documents not yet published at that date. Distinguish current restated history from information available at the historical date.
 
 ### Prices, shares and currencies
@@ -144,12 +144,12 @@ Unless specified otherwise, flow measures are TTM. In comparative indicators, FC
 | DuPont margin × turnover | Group net margin × asset turnover | Equals group ROA. It contains after-financing net income and is not an unlevered return. |
 | Group DuPont ROE | Group net margin × asset turnover × DuPont financial leverage | Equals group net income / average total equity. Do not equate it with common ROE when NCI matters. |
 | FCF earnings conversion | FCF / group net income | Calculate when profit is positive; retain negative FCF. Growth Capex can depress the measure. |
-| Five-year FCF earnings conversion | Sum of FCF for five aligned years / sum of group net income for those years | Not the average of annual ratios. Require positive aggregate profit and complete matched data. Label shorter available windows with the actual number of years. |
+| Multi-year FCF earnings conversion (named for the horizon, e.g. five-year) | Sum of FCF for the horizon's aligned years (3, 5 or 10) / sum of group net income for those years | Not the average of annual ratios. Require positive aggregate profit and complete matched data. Label shorter available windows with the actual number of years. |
 | Interest coverage | EBIT / gross interest expense | Do not substitute FX losses or total finance costs, or net interest income against expense. With zero expense report "no interest expense"; retain and explain negative EBIT. |
 | Interest-rate shock sensitivity | Estimated additional annual interest / EBITDA | Additional interest = debt repricing after hedging × assumed rate increase × fraction of year affected. Show +100/+200/+300 basis-point scenarios by default. Consider maturities and fixed/floating rates; do not assume leases immediately reprice. If exposures are unavailable, do not invent a precise estimate. A full gross-borrowing repricing case may be labelled as a simplified scenario. |
 | Free-float percentage | Publicly tradable shares / total outstanding shares | Identify the source and local definition. Does not alter total market capitalisation. |
 | Selected-period price return | Split-adjusted ending price / beginning price − 1 | User-selected window or standard 1/3/12-month windows. Price declines do not independently prove their cause. |
-| Historical multiple median | Median of meaningful multiples at the preceding five fiscal year-ends | Use each date's price and financial information then available. Five year-end observations are not the median of all trading days. With 3–4 observations label actual coverage; with fewer than 3, omit the historical comparison. |
+| Historical multiple median | Median of meaningful multiples at the preceding fiscal year-ends in the horizon (3, 5 or 10) | Use each date's price and financial information then available. Year-end observations are not the median of all trading days. With fewer observations than the horizon but at least 3, label actual coverage; with fewer than 3, omit the historical comparison. |
 | Deviation from historical median | Current multiple / positive historical median − 1 | Negative means below the historical median. If a positive discount is wanted, use 1 − current/median and label it accordingly. |
 | Cross-source discrepancy | Ratio from source A / equivalently defined ratio from source B − 1 | Diagnostic control. Align period, price, leases and NCI first; explain differences instead of averaging incompatible ratios. |
 
@@ -174,7 +174,7 @@ Historical medians and deviations may be produced for other indicators only wher
 | Gross debt/EBITDA | Debt including leases / EBITDA | Require positive EBITDA. Shows gross financing exposure even when net debt is low. |
 | Dividend payout ratio | Common cash dividends paid during the period / net income attributable to common shareholders | Require positive earnings; explain timing and special dividends. |
 | FCF dividend coverage | FCF / common cash dividends paid | Require positive dividends; explain consolidated/parent scope mismatches. |
-| Revenue CAGR | (Ending annual revenue / beginning annual revenue)^(1/n) − 1 | Positive beginning/ending values and n full annual intervals. A five-year CAGR requires six annual observations. |
+| Revenue CAGR | (Ending annual revenue / beginning annual revenue)^(1/n) − 1 | Positive beginning/ending values and n full annual intervals, n being the horizon (3, 5 or 10). An n-year CAGR requires n + 1 annual observations. |
 | Diluted EPS growth | Comparable current EPS / prior EPS − 1 | Use consistently adjusted positive EPS in both periods. Describe loss-to-profit transitions separately. |
 | Operating NWC/sales | Operating NWC / revenue | Working-capital requirements; negative values can be structural. |
 
@@ -268,7 +268,7 @@ Select 3–5 economically comparable listed companies. Prioritise business model
 
 Include user-selected peers, but flag weak matches and distinguish them from the main comparable group. Do not fill a numerical quota with unsuitable companies. Explain each selection and material differences in period and accounting treatment.
 
-Use the median of meaningful, consistently defined peer observations. Exclude negative-EBITDA companies from an EV/EBITDA median without deleting their broader analysis. Target at least three valid peer values for a principal benchmark; with fewer values, disclose the count and limitation. Peer discount = 1 − company multiple / positive peer median. For ROE and margins use percentage-point differences. Align TTM periods as closely as possible and disclose residual fiscal-calendar differences.
+Use the median of meaningful, consistently defined peer observations. Exclude negative-EBITDA companies from an EV/EBITDA median without deleting their broader analysis. Target at least three valid peer values for a principal benchmark; with fewer values, disclose the count and limitation. Peer discount = 1 − company multiple / positive peer median. For ROE, margins and every other percentage measure (yields, returns, growth rates, conversion and payout ratios) use percentage-point differences (v1.1). The company's historical multiple median is compared with each peer's own historical median and with their median, and "against its historical median" in percentage points (v1.1). Align TTM periods as closely as possible and disclose residual fiscal-calendar differences.
 
 ## 11. User-requested indicators
 

@@ -1,5 +1,6 @@
 # FastAPI application: serves the frontend and the API from one process (port 8000 by default).
 import os
+from typing import Literal
 from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
@@ -37,8 +38,10 @@ FEATURES = {
         "Peer selection from supplied candidate data",
         "Demo data and demo stand-ins for each service, chosen with the Demo option for a whole analysis",
         "Reading PDF, Word, Excel, HTML and text documents with page, section or sheet numbers, and finding the relevant pages (step 2)",
-        "59 indicators from v1.0 sections 5 and 6 with sources, history, peer medians and historical medians; standardised FCF with the reported figure alongside",
+        "63 indicators from v1.0 sections 5 and 6 (EV/sales and EV/EBIT historical medians added in v1.1) with sources, history, peer medians and historical medians; standardised FCF with the reported figure alongside",
         "Choosing indicators by group or one by one; the report shows only the chosen ones",
+        "SEC figures read the way each report tags them (leases, debt, cover-page share counts, minority interests; a company's own D&A element from the full filing when no standard figure covers a twelve-month period); dividend yield estimated from cash dividends when no per-share amount is reported; percentage-point peer comparisons for every percentage measure",
+        "Choosing the horizon: 3, 5 (default) or 10 fiscal years of history, which also sets the window of revenue CAGR, multi-year FCF conversion and the historical medians",
         "Demo analysis on the website: company, peers, Agents 1, 2 and 3 with every statement checked, shown as a report (steps 4 and 5a)",
         "Report download as PDF (default) or Word, with the DEMO label on every page of a demo report (step 5b)",
         "folio. website design: sidebar pages for a new analysis, agent workflow, dashboard with five tabs and a chart, sources and transcripts, my reports (in this browser) and services",
@@ -51,7 +54,7 @@ FEATURES = {
         "Reports for companies outside SEC EDGAR (investor-relations sites, other regulators)",
         "Gathering peer candidates automatically",
         "Bank indicators (v1.0 section 8, part C) and the holding-company module (section 7, part D)",
-        "Choosing the horizon, and extra questions, in the New analysis form (shown as coming later)",
+        "Extra questions in the New analysis form (shown as coming later)",
         "Using uploaded reports in place of EDGAR filings; a list of past analyses kept on the server",
     ],
 }
@@ -71,6 +74,7 @@ class AnalysisRequest(BaseModel):
     as_of: date | None = None  # analysis date; reports published later are left out
     indicators: list[str] | None = None  # indicator ids to report; all when left out
     transcript_upload: str | None = None  # an uploaded earnings-call transcript for Agent 2 (live analyses)
+    horizon_years: Literal[3, 5, 10] = 5  # fiscal years of history; also the window of the multi-year indicators
 
 
 class PeerRequest(BaseModel):
@@ -235,7 +239,7 @@ def create_app(settings: Settings | None = None, provider_factory=None, run=None
         try:
             target = language.resolve_output_language(req.output_language, settings)
             state = analyses.create(req.company, req.demo, target, req.peers, req.as_of or date.today(), req.indicators,
-                                    req.transcript_upload)
+                                    req.transcript_upload, req.horizon_years)
         except language.UnsupportedLanguage as exc:
             raise HTTPException(400, str(exc))
         except pipeline.CompanyNotFound as exc:

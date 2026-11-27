@@ -137,3 +137,27 @@ def test_negative_numbers_keep_their_sign():
                                          statement("P/E is 29.76% against its historical median.", {"indicator": "pe_vs_hist"})],
                                         READ, results, current_period="TTM to Q1 2027")
     assert ok["verified"] and not wrong_sign["verified"]
+
+
+def test_agent_names_are_not_mistaken_for_figures():
+    assert [n[1] for n in V.numbers_in("Agent 1's calculated indicators show a P/FCF of 64.41x; Agent 3 agrees.")] == [64.41]
+
+
+def test_reference_markers_such_as_1_are_removed_not_mistaken_for_figures():
+    [s] = V.check_statements([statement("About 70% of revenue comes from North America. [1]", {"doc_id": "ar", "page": 3}),
+                              ], READ, RESULTS)
+    assert s["verified"], s["issues"]
+    assert s["text"] == "About 70% of revenue comes from North America."
+    [t] = V.check_statements([statement("Common ROE was 18.3% [2, 3] over the twelve months [S4].",
+                                        {"indicator": "roe_common", "period": "TTM to Q3 2026"})], READ, RESULTS)
+    assert t["verified"] and t["text"] == "Common ROE was 18.3% over the twelve months."
+    assert V.numbers_in("Revenue [FY2025] was 1,234.5.") == [("1,234.5", 1234.5, 1, False)]  # a period label in brackets is kept
+
+
+def test_an_empty_placeholder_citation_is_ignored_but_a_real_one_is_still_required():
+    blank = {"doc_id": "", "page": 0}
+    ok, none = V.check_statements([statement("Common ROE was 18.3%.", {"indicator": "roe_common", "period": "TTM to Q3 2026"}, blank),
+                                   statement("Revenue rose.", blank, {"indicator": ""})], READ, RESULTS)
+    assert ok["verified"], ok["issues"]
+    assert ok["citations"] == [{"indicator": "roe_common", "period": "TTM to Q3 2026", "name": None}]
+    assert not none["verified"] and none["issues"] == ["No source cited."]
