@@ -10,12 +10,12 @@ from fastapi.testclient import TestClient
 from backend import financials
 from backend import indicators as ind
 from backend import main
-from backend.demo import demo_data as D
-from backend.demo.demo_providers import demo_services
+from tests.sample import data as D
+from tests.sample.providers import demo_services
 from backend.agents.financial_analyst import company_inputs
 from backend.fetchers import market_data
 from backend.indicators import CompanyInputs
-from tests.helpers import make_settings
+from tests.helpers import make_settings, sample_app
 from tests.test_edgar import edgar_for
 from tests.test_indicators import period
 
@@ -62,7 +62,7 @@ def test_fewer_years_than_the_horizon_are_labelled_with_the_actual_coverage():
 
 def test_the_historical_median_uses_the_year_ends_in_the_horizon():
     def median(years):
-        return current(company_inputs({"ticker": D.TARGET, "name": D.COMPANIES[D.TARGET]["name"]}, demo_services(), ON, D.DEMO_LABEL,
+        return current(company_inputs({"ticker": D.TARGET, "name": D.COMPANIES[D.TARGET]["name"]}, demo_services(), ON,
                                       horizon=years)[0])["pe_hist_median"]
     three, ten = median(3), median(10)
     assert "3 of 3" in three.note and three.period == "year ends 2023–2025"
@@ -97,15 +97,16 @@ def test_edgar_keeps_one_more_fiscal_year_than_the_horizon(tmp_path):
 
 
 def test_the_horizon_is_chosen_per_analysis_and_shown_in_the_report(tmp_path):
-    c = TestClient(main.create_app(make_settings(tmp_path), background_jobs=False))
-    state = c.post("/api/analyses", json={"company": "Northgate", "demo": True, "as_of": "2026-11-20", "horizon_years": 3}).json()
+    c = sample_app(tmp_path)
+    state = c.post("/api/analyses", json={"company": "Northgate", "as_of": "2026-11-20", "horizon_years": 3}).json()
     assert state["status"] == "completed", state.get("error")
     report = c.get(f"/api/analyses/{state['id']}/report").json()
     assert report["agent1"]["indicators"]["horizon_years"] == 3
     rows = {r["indicator"]: r for r in report["agent1"]["indicators"]["current"]}
     assert rows["fcf_conversion_5y"]["name"].startswith("Three-year")
     view = c.get(f"/api/analyses/{state['id']}/view").json()
-    assert any("horizon 3 fiscal years" in b.get("text", "") for b in view["blocks"])
-    default = c.post("/api/analyses", json={"company": "Northgate", "demo": True, "as_of": "2026-11-20"}).json()
+    box = next(b for b in view["blocks"] if b["type"] == "summarybox")
+    assert ["Horizon", "3 fiscal years"] in box["key_data"]  # shown in the report's key-data box
+    default = c.post("/api/analyses", json={"company": "Northgate", "as_of": "2026-11-20"}).json()
     assert c.get(f"/api/analyses/{default['id']}/report").json()["agent1"]["indicators"]["horizon_years"] == 5
-    assert c.post("/api/analyses", json={"company": "Northgate", "demo": True, "horizon_years": 7}).status_code == 422
+    assert c.post("/api/analyses", json={"company": "Northgate", "horizon_years": 7}).status_code == 422

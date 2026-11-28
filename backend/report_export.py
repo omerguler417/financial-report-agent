@@ -1,19 +1,19 @@
 # Exports the report as a PDF (the default download) and as an editable Word file. Both draw the same display blocks as the website
-# (backend/report_blocks.py), so all three show the same content. A demo report carries the DEMO label in the header of every page.
+# (backend/report_blocks.py), so all three show the same content.
 import html
 import io
 
 import docx
-from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Pt, RGBColor
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import HRFlowable, KeepTogether, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
-RED, GREY, AMBER = colors.HexColor("#9b1c1c"), colors.HexColor("#52606d"), colors.HexColor("#8a5a00")
+GREY, AMBER = colors.HexColor("#52606d"), colors.HexColor("#8a5a00")
+NAVY, RULE, SHADE = colors.HexColor("#0b2545"), colors.HexColor("#c9d1db"), colors.HexColor("#f2f4f7")
+FOOTER = "For educational purposes only. Not investment advice."
 # The PDF's built-in fonts cover Western European text; these few signs are swapped for close equivalents.
 SWAPS = {"−": "-", "→": "->", "≤": "<=", "≥": ">="}
 
@@ -43,44 +43,89 @@ def _styles() -> dict:
     base = getSampleStyleSheet()
     body = ParagraphStyle("body", parent=base["BodyText"], fontName="Helvetica", fontSize=9.5, leading=12.5, spaceAfter=4)
     return {
-        "title": ParagraphStyle("title", parent=base["Title"], fontName="Helvetica-Bold", fontSize=16, leading=20, alignment=0, spaceAfter=4),
-        "h2": ParagraphStyle("h2", parent=base["Heading2"], fontName="Helvetica-Bold", fontSize=13, leading=16, spaceBefore=12, spaceAfter=4),
-        "h3": ParagraphStyle("h3", parent=base["Heading3"], fontName="Helvetica-Bold", fontSize=11, leading=14, spaceBefore=8, spaceAfter=2),
+        "kicker": ParagraphStyle("kicker", parent=body, fontName="Helvetica-Bold", fontSize=8, textColor=GREY, spaceAfter=2),
+        "title": ParagraphStyle("title", parent=base["Title"], fontName="Times-Bold", fontSize=21, leading=25, alignment=0, spaceAfter=4,
+                                textColor=NAVY),
+        "h2": ParagraphStyle("h2", parent=base["Heading2"], fontName="Times-Bold", fontSize=14, leading=17, spaceBefore=14, spaceAfter=2,
+                             textColor=NAVY, keepWithNext=1),
+        "h3": ParagraphStyle("h3", parent=base["Heading3"], fontName="Helvetica-Bold", fontSize=9.5, leading=12, spaceBefore=8, spaceAfter=2,
+                             textColor=NAVY, keepWithNext=1),
+        "exhibit": ParagraphStyle("exhibit", parent=body, fontName="Helvetica-Bold", fontSize=8.5, textColor=NAVY, spaceBefore=6, spaceAfter=3),
+        "source": ParagraphStyle("source", parent=body, fontName="Helvetica-Oblique", fontSize=7, leading=9, textColor=GREY, spaceBefore=2),
+        "head": ParagraphStyle("head", parent=body, fontName="Helvetica-Bold", fontSize=6.6, leading=8.5, spaceAfter=0, textColor=colors.white),
+        "lead": ParagraphStyle("lead", parent=body, fontName="Helvetica-Bold"),
+        "box": ParagraphStyle("box", parent=body, fontSize=8.5, leading=11, spaceAfter=3),
+        "subtitle": ParagraphStyle("subtitle", parent=body, fontSize=9, textColor=GREY, spaceAfter=2),
+        "num": ParagraphStyle("num", parent=body, fontSize=7.5, leading=9.5, spaceAfter=0, alignment=2),
         "h4": ParagraphStyle("h4", parent=body, fontName="Helvetica-Bold", spaceBefore=6),
         "body": body,
         "tag": ParagraphStyle("tag", parent=body, fontName="Helvetica-Bold", fontSize=8, textColor=GREY, spaceAfter=0),
         "small": ParagraphStyle("small", parent=body, fontSize=8, leading=10, textColor=GREY),
         "issue": ParagraphStyle("issue", parent=body, fontSize=8.5, leading=11, textColor=AMBER),
         "cell": ParagraphStyle("cell", parent=body, fontSize=7.5, leading=9.5, spaceAfter=0),
-        "banner": ParagraphStyle("banner", parent=body, fontName="Helvetica-Bold", textColor=RED, alignment=TA_CENTER, borderColor=RED,
-                                 borderWidth=0.8, borderPadding=5, backColor=colors.HexColor("#fde8e8"), spaceBefore=4, spaceAfter=10),
     }
 
 
 def _pdf_table(block: dict, st: dict, width: float) -> list:
+    """A bank-style exhibit: navy header row, thin rules between rows, figures right-aligned, the source underneath."""
     columns = block["columns"]
-    if len(columns) == 5:  # key figures: give the status and notes column the most room
+    if len(columns) == 5 and columns[-1] == "Status and notes":  # all indicators: give the notes column the most room
         widths = [w * width for w in (0.16, 0.11, 0.11, 0.15, 0.47)]
     else:
-        widths = [0.28 * width] + [0.72 * width / (len(columns) - 1)] * (len(columns) - 1)
-    rows = [[Paragraph(f"<b>{_esc(c)}</b>", st["cell"]) for c in columns]]
-    rows += [[Paragraph(_esc(cell), st["cell"]) for cell in row] for row in block["rows"]]
+        first = 0.5 if len(columns) <= 2 else 0.22 if len(columns) > 7 else 0.30  # wide comparables tables give the figures more room
+        widths = [first * width] + [(1 - first) * width / (len(columns) - 1)] * (len(columns) - 1)
+    numeric = block.get("title", "").startswith("Exhibit")
+    rows = [[Paragraph(_esc(c), st["head"]) for c in columns]]
+    rows += [[Paragraph(_esc(cell), st["num"] if numeric and i else st["cell"]) for i, cell in enumerate(row)] for row in block["rows"]]
     table = Table(rows, colWidths=widths, repeatRows=1)
-    table.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#c5ccd3")),
-                               ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eef1f4")), ("VALIGN", (0, 0), (-1, -1), "TOP")]))
-    return [table] + [Paragraph(_esc(note), st["small"]) for note in block.get("notes", [])]
+    style = [("BACKGROUND", (0, 0), (-1, 0), NAVY), ("VALIGN", (0, 0), (-1, -1), "TOP"),
+             ("LINEBELOW", (0, 1), (-1, -1), 0.3, RULE), ("TOPPADDING", (0, 0), (-1, -1), 2.5), ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
+             ("LEFTPADDING", (0, 0), (-1, -1), 3), ("RIGHTPADDING", (0, 0), (-1, -1), 3)]
+    if block["rows"] and block["rows"][-1][0] == "Peer median":
+        style += [("BACKGROUND", (0, -1), (-1, -1), SHADE), ("LINEABOVE", (0, -1), (-1, -1), 0.8, NAVY)]
+    table.setStyle(TableStyle(style))
+    out = [Paragraph(_esc(block["title"]), st["exhibit"])] if block.get("title") else []
+    out.append(table)
+    if block.get("source"):
+        out.append(Paragraph(_esc(block["source"]), st["source"]))
+    out += [Paragraph(_esc(note), st["small"]) for note in block.get("notes", [])]
+    return [KeepTogether(out)] if numeric and len(block["rows"]) < 25 else out
+
+
+def _pdf_summarybox(block: dict, st: dict, width: float) -> list:
+    """The first-page box of a research note: key comparisons on the left, key data and peers on the right."""
+    left_w, right_w = 0.6 * width, 0.4 * width
+    left = [Paragraph("KEY COMPARISONS", st["kicker"])]
+    left += [Paragraph("• " + _esc(line), st["box"]) for line in block["comparisons"]] or [Paragraph("No peer comparison available.", st["box"])]
+    data = Table([[Paragraph(_esc(label), st["small"]), Paragraph(f"<b>{_esc(value)}</b>", st["num"])] for label, value in block["key_data"]],
+                 colWidths=[0.55 * (right_w - 12), 0.45 * (right_w - 12)])
+    data.setStyle(TableStyle([("LINEBELOW", (0, 0), (-1, -2), 0.3, RULE), ("TOPPADDING", (0, 0), (-1, -1), 2),
+                              ("BOTTOMPADDING", (0, 0), (-1, -1), 2), ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0)]))
+    right = [Paragraph("KEY DATA", st["kicker"]), data, Spacer(1, 6), Paragraph(f"<b>Peers:</b> {_esc(block['peers'])}", st["small"])]
+    box = Table([[left, right]], colWidths=[left_w, right_w])
+    box.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("LINEABOVE", (0, 0), (-1, 0), 1.4, NAVY),
+                             ("BACKGROUND", (1, 0), (1, 0), SHADE), ("TOPPADDING", (0, 0), (-1, -1), 8), ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+                             ("LEFTPADDING", (0, 0), (0, 0), 0), ("RIGHTPADDING", (0, 0), (0, 0), 10), ("LEFTPADDING", (1, 0), (1, 0), 6),
+                             ("RIGHTPADDING", (1, 0), (1, 0), 6), ("LINEBELOW", (0, 0), (-1, 0), 0.4, RULE)]))
+    return [Spacer(1, 6), box, Spacer(1, 4)]
 
 
 def _pdf_flowables(view: dict, st: dict, width: float) -> list:
     out = []
     for block in view["blocks"]:
         kind = block["type"]
-        if kind == "banner":
-            out.append(Paragraph(_esc(block["text"]), st["banner"]))
+        if kind == "heading" and block["level"] == 1:
+            out += [Paragraph("COMPANY ANALYSIS", st["kicker"]), Paragraph(_esc(block["text"]), st["title"])]
+        elif kind == "heading" and block["level"] == 2:
+            out += [Paragraph(_esc(block["text"]), st["h2"]), HRFlowable(width="100%", thickness=0.8, color=NAVY, spaceAfter=4)]
         elif kind == "heading":
-            out.append(Paragraph(_esc(block["text"]), st["title" if block["level"] == 1 else "h2" if block["level"] == 2 else "h3"]))
+            out.append(Paragraph(_esc(block["text"]), st["h3"]))
+        elif kind == "summarybox":
+            out += _pdf_summarybox(block, st, width)
+        elif kind == "paragraph" and out and getattr(out[-1], "style", None) is st["title"]:  # the line under the title
+            out.append(Paragraph(_esc(block["text"]), st["subtitle"]))
         elif kind == "paragraph":
-            out.append(Paragraph(_esc(block["text"]), st["body"]))
+            out.append(Paragraph(_esc(block["text"]), st["lead" if block.get("style") == "lead" else "body"]))
         elif kind == "statements":
             if not block["items"]:
                 out.append(Paragraph("Nothing to show.", st["small"]))
@@ -99,8 +144,22 @@ def _pdf_flowables(view: dict, st: dict, width: float) -> list:
         elif kind == "list":
             if block.get("title"):
                 out.append(Paragraph(_esc(block["title"]), st["h4"]))
-            style = st["issue"] if block.get("style") == "warn" else st["body"]
+            style = {"warn": st["issue"], "small": st["small"], "warn-small": st["issue"]}.get(block.get("style"), st["body"])
             out += [Paragraph("• " + _esc(item), style) for item in block["items"]]
+    return out
+
+
+def _keep_headings_with_text(flowables: list) -> list:
+    """A section heading, its rule and the first thing under it go on the same page."""
+    out, i = [], 0
+    while i < len(flowables):
+        f = flowables[i]
+        if isinstance(f, Paragraph) and f.style.name == "h2" and i + 2 < len(flowables) and isinstance(flowables[i + 1], HRFlowable):
+            out.append(KeepTogether(flowables[i:i + 3]))
+            i += 3
+        else:
+            out.append(f)
+            i += 1
     return out
 
 
@@ -108,21 +167,26 @@ def to_pdf(view: dict) -> bytes:
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=1.8 * cm, rightMargin=1.8 * cm, topMargin=2.2 * cm, bottomMargin=1.8 * cm,
                             title=_clean(view["title"]), author="Financial Report Analysis Agent")
-    label = view.get("demo_label")
 
     def decorate(canvas, document):
         canvas.saveState()
-        if label:  # the DEMO label on every page
-            canvas.setFont("Helvetica-Bold", 9)
-            canvas.setFillColor(RED)
-            canvas.drawCentredString(A4[0] / 2, A4[1] - 1.2 * cm, _clean(label))
+        canvas.setStrokeColor(NAVY)
+        canvas.setLineWidth(0.6)
+        canvas.line(1.8 * cm, A4[1] - 1.5 * cm, A4[0] - 1.8 * cm, A4[1] - 1.5 * cm)
+        canvas.setFont("Times-Bold", 9)
+        canvas.setFillColor(NAVY)
+        canvas.drawString(1.8 * cm, A4[1] - 1.3 * cm, "folio.")
+        canvas.setFont("Helvetica", 7)
+        canvas.setFillColor(GREY)
+        canvas.drawRightString(A4[0] - 1.8 * cm, A4[1] - 1.3 * cm, "Company analysis")
+        canvas.drawCentredString(A4[0] / 2, 0.65 * cm, FOOTER)
         canvas.setFont("Helvetica", 8)
         canvas.setFillColor(GREY)
         canvas.drawRightString(A4[0] - 1.8 * cm, 1.0 * cm, f"Page {document.page}")
         canvas.drawString(1.8 * cm, 1.0 * cm, _clean(view["title"]))
         canvas.restoreState()
 
-    doc.build(_pdf_flowables(view, _styles(), doc.width), onFirstPage=decorate, onLaterPages=decorate)
+    doc.build(_keep_headings_with_text(_pdf_flowables(view, _styles(), doc.width)), onFirstPage=decorate, onLaterPages=decorate)
     return buffer.getvalue()
 
 
@@ -142,21 +206,31 @@ def to_docx(view: dict) -> bytes:
     document = docx.Document()
     document.core_properties.title = view["title"]
     document.styles["Normal"].font.size = Pt(10)
-    label = view.get("demo_label")
-    if label:  # a header repeats on every page
-        header = document.sections[0].header.paragraphs[0]
-        header.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        _run(header, label, bold=True, size=9, color="9B1C1C")
+    for name in ("Title", "Heading 1", "Heading 2"):  # serif headings in navy, as in a bank's report
+        document.styles[name].font.name = "Times New Roman"
+        document.styles[name].font.color.rgb = RGBColor.from_string("0B2545")
+    footer = document.sections[0].footer.paragraphs[0]
+    _run(footer, FOOTER, size=7, color="52606D")
     for block in view["blocks"]:
         kind = block["type"]
-        if kind == "banner":
-            p = document.add_paragraph()
-            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            _run(p, block["text"], bold=True, color="9B1C1C")
-        elif kind == "heading":
+        if kind == "heading":
+            if block["level"] == 1:
+                _run(document.add_paragraph(), "COMPANY ANALYSIS", bold=True, size=8, color="52606D")
             document.add_heading(block["text"], level=min(block["level"] - 1, 3) if block["level"] > 1 else 0)
+        elif kind == "summarybox":
+            table = document.add_table(rows=1, cols=2)
+            left, right = table.rows[0].cells
+            _run(left.paragraphs[0], "KEY COMPARISONS", bold=True, size=8, color="52606D")
+            for line in block["comparisons"]:
+                _run(left.add_paragraph(), "• " + line, size=8.5)
+            _run(right.paragraphs[0], "KEY DATA", bold=True, size=8, color="52606D")
+            for label, value in block["key_data"]:
+                p = right.add_paragraph()
+                _run(p, f"{label}: ", size=8.5, color="52606D")
+                _run(p, value, bold=True, size=8.5)
+            _run(right.add_paragraph(), f"Peers: {block['peers']}", size=8.5)
         elif kind == "paragraph":
-            document.add_paragraph(block["text"])
+            _run(document.add_paragraph(), block["text"], bold=block.get("style") == "lead")
         elif kind == "statements":
             if not block["items"]:
                 _run(document.add_paragraph(), "Nothing to show.", size=9, color="52606D")
@@ -173,8 +247,10 @@ def to_docx(view: dict) -> bytes:
                 for issue in item["issues"]:
                     _run(document.add_paragraph(), issue, size=8.5, color="8A5A00")
         elif kind == "table":
+            if block.get("title"):
+                _run(document.add_paragraph(), block["title"], bold=True, size=9, color="0B2545")
             table = document.add_table(rows=1, cols=len(block["columns"]))
-            table.style = "Table Grid"
+            table.style = "Light List Accent 1"
             for cell, name in zip(table.rows[0].cells, block["columns"]):
                 cell.text = ""
                 _run(cell.paragraphs[0], name, bold=True, size=8)
@@ -183,6 +259,9 @@ def to_docx(view: dict) -> bytes:
                 for cell, value in zip(cells, row):
                     cell.text = ""
                     _run(cell.paragraphs[0], value, size=8)
+            if block.get("source"):
+                p = document.add_paragraph()
+                _run(p, block["source"], size=7.5, color="52606D").italic = True
             for note in block.get("notes", []):
                 _run(document.add_paragraph(), note, size=8, color="52606D")
         elif kind == "list":
@@ -190,7 +269,8 @@ def to_docx(view: dict) -> bytes:
                 _run(document.add_paragraph(), block["title"], bold=True)
             for item in block["items"]:
                 p = document.add_paragraph(style="List Bullet")
-                _run(p, item, color="8A5A00" if block.get("style") == "warn" else None)
+                _run(p, item, color="8A5A00" if "warn" in str(block.get("style")) else None,
+                     size=8.5 if block.get("style") in ("small", "warn-small") else None)
     buffer = io.BytesIO()
     document.save(buffer)
     return buffer.getvalue()

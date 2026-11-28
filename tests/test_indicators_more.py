@@ -5,8 +5,8 @@ from datetime import date
 import pytest
 
 from backend import indicators as ind
-from backend.demo import demo_data as D
-from backend.demo.demo_providers import demo_company_inputs
+from tests.sample import data as D
+from tests.sample.providers import demo_company_inputs
 from tests.test_indicators import fig, sample
 
 EXTRA = {

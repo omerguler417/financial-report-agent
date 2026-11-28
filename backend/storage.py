@@ -1,4 +1,4 @@
-# Saved files on disk (no database): retrieved and uploaded documents with source details and versions, temporary processing files, and saved reports.
+# Saved files on disk (no database): retrieved and uploaded documents with source details and versions, temporary processing files, and the analyses (jobs).
 import hashlib
 import json
 import re
@@ -65,8 +65,7 @@ class Store:
         self.documents_dir = self.root / "documents"
         self.tmp_root = self.root / "tmp"
         self.jobs_dir = self.root / "jobs"
-        self.reports_dir = self.root / "reports"
-        for d in (self.documents_dir, self.tmp_root, self.jobs_dir, self.reports_dir):
+        for d in (self.documents_dir, self.tmp_root, self.jobs_dir):
             d.mkdir(parents=True, exist_ok=True)
 
     # ---- documents and recordings ----
@@ -217,41 +216,3 @@ class Store:
                 shutil.rmtree(path, ignore_errors=True) if path.is_dir() else path.unlink(missing_ok=True)
                 removed.append(path.name)
         return removed
-
-    # ---- saved reports ----
-
-    def save_report(self, title: str, content: dict, citations: list[dict], now=None) -> dict:
-        """Save a report with copies of the exact source versions it cites, so citations stay valid."""
-        now = now or utcnow()
-        report_id = uuid.uuid4().hex[:12]
-        report_dir = self.reports_dir / report_id
-        sources_dir = report_dir / "sources"
-        sources_dir.mkdir(parents=True)
-        linked = []
-        for citation in citations:
-            meta = self.get(citation["doc_id"])
-            version = citation.get("version", meta["versions"][-1]["version"])
-            source = self.version_path(meta, version)
-            copy_name = f"{meta['id']}_v{version}_{meta['filename']}"
-            shutil.copy2(source, sources_dir / copy_name)
-            linked.append({**citation, "version": version, "origin": meta["origin"], "source_url": meta.get("source_url"),
-                           "filename": meta["filename"], "copy": f"sources/{copy_name}"})
-        record = {"id": report_id, "title": title, "created_at": _iso(now), "content": content, "citations": linked}
-        (report_dir / "report.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
-        return record
-
-    def list_reports(self) -> list[dict]:
-        reports = []
-        for path in sorted(self.reports_dir.glob("*/report.json")):
-            data = json.loads(path.read_text(encoding="utf-8"))
-            reports.append({"id": data["id"], "title": data["title"], "created_at": data["created_at"],
-                            "citations": len(data["citations"])})
-        return sorted(reports, key=lambda r: r["created_at"], reverse=True)
-
-    def delete_report(self, report_id: str) -> None:
-        if not re.fullmatch(r"[0-9a-f]{12}", report_id or ""):
-            raise NotFound(report_id)
-        directory = self.reports_dir / report_id
-        if not directory.exists():
-            raise NotFound(report_id)
-        shutil.rmtree(directory)

@@ -1,11 +1,11 @@
 # Agent 3: combines Agents 1 and 2 into one report: an overview, where the sources disagree (each position labelled with who said it),
 # the main risks, and, built in Python, what is missing, what could not be verified, and the limitations. It never calculates: every
 # number must come from a cited source or a Python result, and every statement is checked like the other agents' statements.
-from backend import prompts, report_blocks, validation
+from backend import prompts, report_blocks, retrieval, validation
 
 AGENT = "Agent 3 – combined report"
 US_EXCHANGES = {"NYSE", "NASDAQ", "NYSE AMERICAN", "AMEX", "NYSEARCA", "ARCA"}
-ORIGINS = {"transcript": "Agent 2 (earnings call)", "news": "Agent 2 (news)"}
+ORIGINS = {"transcript": "Agent 2 (earnings call)"}
 
 
 def _origin(citation: dict, read: dict) -> str:
@@ -24,7 +24,9 @@ def _payload(company: dict, agent1: dict, agent2: dict, results: list[dict]) -> 
                         "cite_as": {"indicator": r.get("indicator"), "period": r.get("period")}}
                        for r in results if r["period"] in (current, "peer median")],
         "call": [{k: s.get(k) for k in ("kind", "speaker", "text", "citations")} for s in agent2["call"]["statements"] if s["verified"]],
-        "news": [{k: i.get(k) for k in ("id", "publisher", "published", "title", "channel")} for i in agent2["news"]["included"] if i["verified"]],
+        "call_questions": [{"analyst": q["analyst"], "question": q["question"]["text"], "question_citations": q["question"]["citations"],
+                            "answered_by": q["answered_by"], "answer": q["answer"]["text"], "answer_citations": q["answer"]["citations"]}
+                           for q in agent2["call"].get("questions", []) if q["question"]["verified"] and q["answer"]["verified"]],
     }
 
 
@@ -37,18 +39,17 @@ def _missing(agent1: dict, agent2: dict) -> list[str]:
     return items
 
 
-def _limitations(company: dict, demo_label: str | None, left_out: list[str] | None = None) -> list[str]:
+def _limitations(company: dict, left_out: list[str] | None = None) -> list[str]:
     items = []
     if left_out:
         items.append(f"Indicators left out at your request ({len(left_out)}): {', '.join(left_out)}.")
-    if demo_label:
-        items.append(f"{demo_label}. The model's answers are recorded, and a few contain deliberate mistakes so the checks can be seen working.")
     items += [
         "Comparisons use standardised free cash flow (after cash interest and lease repayments), with the reported figure alongside; "
         "where those adjustments are not in the reports, the reported figure is used and labelled.",
         "Enterprise value uses non-controlling interests at book value.",
-        "Multiples at past year ends (historical medians) are not calculated yet; the history covers indicators that need no share price.",
-        "Indicator definitions follow docs/indicator_definitions.md v1.0.",
+        "The fiscal-year history covers indicators that need no share price; price-based multiples are compared with their own past "
+        "through the historical medians.",
+        "Indicator definitions follow docs/indicator_definitions.md v1.1.",
         "Statements labelled unverified are kept so they can be seen, but their cited source does not support them.",
     ]
     if (company.get("exchange") or "").upper() not in US_EXCHANGES:
@@ -57,7 +58,36 @@ def _limitations(company: dict, demo_label: str | None, left_out: list[str] | No
     return items
 
 
-def run(company: dict, agent1: dict, agent2: dict, services, context: dict) -> dict:
+PAGES_PER_QUESTION = 6
+UNANSWERED = "The reports and the call do not answer this question."
+
+
+def answer_questions(company: dict, questions: list[str], payload: dict, services, check) -> list[dict]:
+    """The user's own questions, answered only from the most relevant pages read (reports and call) and the calculated indicators.
+    Every sentence is checked like the other statements; a question the sources do not answer says so."""
+    if not questions:
+        return []
+    read = payload["read"]
+    pages = {doc_id: item["pages"] for doc_id, item in read.items()}
+    data = {"ticker": company["ticker"], "company": company["name"], "indicators": payload["indicators"],
+            "questions": [{"number": i, "question": q,
+                           "pages": [{"doc_id": p.doc_id, "page": p.page, "text": p.text} for p in retrieval.retrieve(pages, q, k=PAGES_PER_QUESTION)]}
+                          for i, q in enumerate(questions, 1)]}
+    request = prompts.build("answer_questions", data)
+    given = {}
+    for a in validation.as_list(services.model.ask(request["task"], request["data"]).get("answers")):
+        if isinstance(a, dict) and str(a.get("number", "")).isdigit():
+            given[int(a["number"])] = a
+    out = []
+    for i, q in enumerate(questions, 1):
+        a = given.get(i, {})
+        statements = check(a.get("statements")) if a.get("answered") else []
+        answered = bool(statements)
+        out.append({"question": q, "answered": answered, "statements": statements, "note": "" if answered else UNANSWERED})
+    return out
+
+
+def run(company: dict, agent1: dict, agent2: dict, services, context: dict, questions: list[str] | None = None) -> dict:
     read, results = context.get("read", {}), context.get("results", [])
     request = prompts.build("combine_report", _payload(company, agent1, agent2, results))
     answer = services.model.ask(request["task"], request["data"])
@@ -81,20 +111,24 @@ def run(company: dict, agent1: dict, agent2: dict, services, context: dict) -> d
             entry["note"] = "All positions come from the same source, so this is not a disagreement between sources."
         disagreements.append(entry)
 
+    payload = _payload(company, agent1, agent2, results)
+    answers = answer_questions(company, questions or [], {"read": read, "indicators": payload["indicators"]}, services, check)
+
     unverified = [{"agent": "Agent 1", "text": s["text"], "issues": s["issues"]} for s in agent1["summary"] if not s["verified"]]
-    unverified += [{"agent": "Agent 2", "text": s["text"], "issues": s["issues"]} for s in agent2["call"]["statements"] if not s["verified"]]
-    unverified += [{"agent": "Agent 2", "text": i["channel"], "issues": i["issues"]} for i in agent2["news"]["included"] if not i["verified"]]
-    own = overview + risks + [p for d in disagreements for p in d["positions"]]
+    call_items = agent2["call"]["statements"] + [s for q in agent2["call"].get("questions", []) for s in (q["question"], q["answer"])]
+    unverified += [{"agent": "Agent 2", "text": s["text"], "issues": s["issues"]} for s in call_items if not s["verified"]]
+    own = overview + risks + [p for d in disagreements for p in d["positions"]] + [s for a in answers for s in a["statements"]]
     unverified += [{"agent": "Agent 3", "text": s["text"], "issues": s["issues"]} for s in own if not s["verified"]]
-    total = len(agent1["summary"]) + len(agent2["call"]["statements"]) + len(agent2["news"]["included"]) + len(own)
+    total = len(agent1["summary"]) + len(call_items) + len(own)
 
     return {
         "agent": AGENT,
         "overview": overview,
         "disagreements": disagreements,
         "risks": risks,
+        "questions": answers,
         "missing_information": _missing(agent1, agent2),
         "unverified_statements": unverified,
-        "limitations": _limitations(company, getattr(services, "label", None), agent1["indicators"].get("left_out")),
+        "limitations": _limitations(company, agent1["indicators"].get("left_out")),
         "statement_check": {"checked": total, "verified": total - len(unverified), "unverified": len(unverified)},
     }

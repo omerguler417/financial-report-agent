@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 from backend import comparisons, main
 from backend import validation as V
-from tests.helpers import make_settings
+from tests.helpers import make_settings, sample_app
 
 
 def result(indicator, name, value, unit, period="TTM to Q1 2027", status="calculated", inputs=None):
@@ -76,8 +76,8 @@ def test_each_group_has_a_short_summary_led_by_its_key_indicators():
 
 
 def test_a_demo_analysis_gets_comparison_lines_that_pass_the_wording_check_and_cite_real_results(tmp_path):
-    c = TestClient(main.create_app(make_settings(tmp_path), background_jobs=False))
-    state = c.post("/api/analyses", json={"company": "Northgate", "demo": True, "as_of": "2026-11-20"}).json()
+    c = sample_app(tmp_path)
+    state = c.post("/api/analyses", json={"company": "Northgate", "as_of": "2026-11-20"}).json()
     rep = c.get(f"/api/analyses/{state['id']}/report").json()
     view = c.get(f"/api/analyses/{state['id']}/view").json()
     out = view["comparisons"]
@@ -95,7 +95,8 @@ def test_a_demo_analysis_gets_comparison_lines_that_pass_the_wording_check_and_c
     assert not any(line["kind"] == "summary" for line in history_group["lines"])  # no count mixing own history with peers
     peer_rows = {row["indicator"]: row for row in rep["agent1"]["peer_comparison"]}
     assert set(peer_rows["pe_hist_median"]["peer_values"]) == {"CRBN.DEMO", "RDGE.DEMO", "SLTK.DEMO"}  # every peer's own value is kept
-    assert any(b.get("title", "").startswith("What the comparison shows") for b in view["blocks"])  # also in the report, PDF and Word
+    headings = [b["text"] for b in view["blocks"] if b["type"] == "heading"]
+    assert "Profitability" in headings and any(h.endswith("Financial analysis") for h in headings)  # the lines are in the report too
 
 
 def test_the_tables_get_their_display_values_from_python():
@@ -110,7 +111,7 @@ def test_the_tables_get_their_display_values_from_python():
     cells = out["cells"]
     assert cells["pe"] == {"value": "25.51x", "peer_median": "14.63x", "difference": "+74.4%", "own_history": "median 31.90x, now -20.0%",
                            "peers": {"ORCL": "30.20x", "CRM": "missing"}}
-    assert cells["net_margin"]["difference"] == "+12.30 pp" and cells["net_margin"]["own_history"] == "30.00% (FY2024) → 36.00% (FY2026)"
+    assert cells["net_margin"]["difference"] == "+12.30 pp" and cells["net_margin"]["own_history"] == "30.00% → 36.00% (FY2024–FY2026)"
     assert cells["dividend_yield"]["value"] == "—" and cells["dividend_yield"]["difference"] == "—"
 
 
@@ -127,3 +128,9 @@ def test_a_group_summary_also_says_how_its_key_measures_moved_over_time():
     trends = [line["text"] for line in group["lines"] if line["kind"] == "trend"]
     assert trends == ["Common ROE was 20.00% in FY2024 and 30.00% in FY2026: higher each year.",
                       "Net profit margin was 30.00% in FY2024 and 26.00% in FY2026: lower each year."]  # key measures first, at most two
+
+
+def test_the_own_history_cell_is_short_enough_for_a_table():
+    years = {fy: [result("bvps", "Book value per share", v, "USD per share", fy)] for fy, v in (("FY2021", 18.88), ("FY2026", 59.56))}
+    out = comparisons.build(report([result("bvps", "Book value per share", 63.35, "USD per share")], [], years))
+    assert out["cells"]["bvps"]["own_history"] == "18.88 → 59.56 (FY2021–FY2026)"

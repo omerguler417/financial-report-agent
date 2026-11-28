@@ -34,7 +34,7 @@ def ffmpeg_available() -> bool:
 
 
 def _require_ffmpeg(run=subprocess.run):
-    """Only the real runner needs FFmpeg installed; a stand-in runner (tests, demo mode) replaces it."""
+    """Only the real runner needs FFmpeg installed; a stand-in runner (tests) replaces it."""
     if run is subprocess.run and not ffmpeg_available():
         raise FFmpegMissing("FFmpeg is not installed, so recordings cannot be processed. On macOS run: brew install ffmpeg")
 

@@ -1,1 +1,0 @@
-# Placeholder: will fetch company announcements and credible independent news, prioritising items since the latest financial-results announcement and including older developments that remain materially relevant, each with publisher, date and link; the provider is chosen later.

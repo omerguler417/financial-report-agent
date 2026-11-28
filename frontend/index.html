@@ -21,7 +21,7 @@
     </nav>
     <div class="sidebar-note">
       <strong>Three agents. One evidence-led report.</strong>
-      <p>Agent 1 reads the reports and calculates the indicators. Agent 2 reviews the earnings call and the news. Agent 3 combines both, with a source for every statement.</p>
+      <p>Reports, earnings call and one sourced report.</p>
     </div>
   </aside>
   <div class="scrim" id="scrim"></div>
@@ -32,7 +32,6 @@
       <nav class="breadcrumb" id="breadcrumb" aria-label="Breadcrumb">folio</nav>
       <a class="btn btn-green" id="new-analysis-button" href="#new">＋ New analysis</a>
     </header>
-    <div class="demo-banner" id="demo-banner" role="status" hidden></div>
 
     <main class="content">
       <!-- 01 New analysis -->
@@ -40,14 +39,14 @@
         <div class="page-head">
           <span class="eyebrow">01 / Setup</span>
           <h1>New analysis</h1>
-          <p>Name one company. Agent 1 reads its reports and calculates the indicators in Python, Agent 2 reviews its earnings call and the news, and Agent 3 combines both into one sourced report.</p>
+          <p>Name one company to analyse.</p>
         </div>
         <div class="two-col">
           <div class="card">
             <form id="analysis-form" novalidate>
               <label class="field">
                 <span class="label">Company</span>
-                <input type="text" id="company" placeholder="Company name or ticker, e.g. Northgate" required autocomplete="off">
+                <input type="text" id="company" placeholder="Company name or ticker, e.g. Microsoft or MSFT" required autocomplete="off">
               </label>
               <div class="field-row">
                 <label class="field">
@@ -66,15 +65,14 @@
               <fieldset class="field">
                 <legend class="label">Indicators <span class="optional" id="indicator-count"></span></legend>
                 <div class="indicator-picker" id="indicator-picker"><p class="empty">Loading the indicator list…</p></div>
-                <p class="hint">All are ticked. Untick a group, or open it to untick single indicators. Definitions follow v1.1; the report shows only your choice.</p>
               </fieldset>
               <label class="field">
                 <span class="label">Peers <em class="optional">optional</em></span>
                 <input type="text" id="peers" placeholder="Tickers separated by commas; otherwise three to five are chosen for you" autocomplete="off">
               </label>
               <label class="field">
-                <span class="label">Extra questions <em class="soon">Coming later</em></span>
-                <textarea id="extra-questions" rows="2" disabled placeholder="For example: how exposed is the company to new regulation?"></textarea>
+                <span class="label">Your questions <em class="optional">optional, up to 3, one per line</em></span>
+                <textarea id="extra-questions" rows="3" maxlength="920" placeholder="For example: what does management expect for capital expenditure?"></textarea>
               </label>
               <div class="field">
                 <span class="label">Your own files <em class="optional">optional</em></span>
@@ -88,18 +86,11 @@
                 <p class="message" id="upload-message" role="status"></p>
               </div>
               <label class="field">
-                <span class="label">Earnings-call transcript <em class="optional">optional, live analyses</em></span>
+                <span class="label">Earnings-call transcript <em class="optional">optional</em></span>
                 <select id="transcript-upload"><option value="">None</option></select>
-                <span class="hint">An uploaded transcript (text, PDF, Word or HTML) for Agent 2 to analyse.</span>
+                <span class="hint">None: fetched automatically.</span>
               </label>
-              <fieldset class="field">
-                <legend class="label">Data</legend>
-                <div class="segmented">
-                  <label><input type="radio" name="mode" value="live" checked><span>Live data</span></label>
-                  <label><input type="radio" name="mode" value="demo"><span>Demo (fictional data)</span></label>
-                </div>
-                <p class="hint">Live analyses work for SEC filers: figures come from SEC EDGAR, the text parts from your configured text model. Share prices and news have no provider yet and are shown as not available. Demo companies: Northgate (NRTH.DEMO), Ridgeway (RDGE.DEMO), Saltlake (SLTK.DEMO), Carbonfield (CRBN.DEMO), Lakeshore Bank (LKSB.DEMO).</p>
-              </fieldset>
+              <p class="hint">For companies that file with the SEC.</p>
               <button class="btn btn-green btn-block" type="submit">Run analysis</button>
               <div id="analysis-status" class="analysis-status" role="status"></div>
             </form>
@@ -107,14 +98,23 @@
 
           <div class="stack">
             <div class="card">
+              <h2>Share price check</h2>
+              <p class="hint">Last closing price.</p>
+              <form id="price-form" class="inline-form">
+                <input type="text" id="ticker" placeholder="Ticker, e.g. MSFT" required autocomplete="off">
+                <button class="btn" type="submit">Check price</button>
+              </form>
+              <p class="message" id="price-result" role="status"></p>
+            </div>
+            <div class="card">
               <span class="eyebrow">02 / Workflow</span>
               <h2>How the three agents work</h2>
               <div class="flow">
-                <div class="flow-node">Sources<small>Company reports, earnings call, news</small></div>
+                <div class="flow-node">Sources<small>Company reports and the earnings call</small></div>
                 <div class="flow-arrow">↓</div>
                 <div class="flow-pair">
                   <div class="flow-node agent-1">Agent 1 · Financial analyst<small>Reads the reports, calculates the indicators in Python, compares with history and peers</small></div>
-                  <div class="flow-node agent-2">Agent 2 · Meeting &amp; news analyst<small>Earnings call: management, guidance and analysts kept apart; relevant news</small></div>
+                  <div class="flow-node agent-2">Agent 2 · Earnings-call analyst<small>Management, guidance and analysts' questions kept apart</small></div>
                 </div>
                 <div class="flow-arrow">↓</div>
                 <div class="flow-node agent-3">Agent 3 · Report combiner<small>One report: overview, disagreements, risks, what is missing</small></div>
@@ -136,7 +136,7 @@
         <div class="page-head">
           <span class="eyebrow">02 / Workflow</span>
           <h1>Agent workflow</h1>
-          <p>Each step of the current analysis. The agents run one after another; Agent 2 starts when Agent 1 has finished.</p>
+          <p>Progress of the current analysis.</p>
         </div>
         <div class="dark-banner" id="workflow-banner"><p>No analysis is running. Start one under New analysis.</p></div>
         <div id="workflow-steps" class="steps"></div>
@@ -144,8 +144,8 @@
 
       <!-- 03 Analysis dashboard -->
       <section class="page" id="page-dashboard" hidden>
-        <div class="page-head">
-          <span class="eyebrow">03 / Dashboard</span>
+        <div class="page-head" id="dash-head">
+          <span class="eyebrow" id="dash-eyebrow">03 / Dashboard</span>
           <h1 id="dash-title">Analysis dashboard</h1>
           <p id="dash-sub">The results of the current analysis.</p>
         </div>
@@ -155,14 +155,12 @@
           <div class="tabs" role="tablist">
             <button type="button" role="tab" data-tab="overview" class="active">Overview</button>
             <button type="button" role="tab" data-tab="financials">Financials &amp; peers</button>
-            <button type="button" role="tab" data-tab="meetings">Meetings &amp; news</button>
-            <button type="button" role="tab" data-tab="assessment">Integrated assessment</button>
+            <button type="button" role="tab" data-tab="call">Earnings call</button>
             <button type="button" role="tab" data-tab="report">Final report</button>
           </div>
           <div class="tab-panel" id="tab-overview"></div>
           <div class="tab-panel" id="tab-financials" hidden></div>
-          <div class="tab-panel" id="tab-meetings" hidden></div>
-          <div class="tab-panel" id="tab-assessment" hidden></div>
+          <div class="tab-panel" id="tab-call" hidden></div>
           <div class="tab-panel" id="tab-report" hidden></div>
         </div>
       </section>
@@ -172,7 +170,7 @@
         <div class="page-head">
           <span class="eyebrow">04 / Evidence</span>
           <h1>Sources &amp; transcripts</h1>
-          <p>Every document page, calculated result, news item and price the current analysis relies on.</p>
+          <p>Every source the current analysis uses.</p>
         </div>
         <div class="card empty-card" id="sources-empty">Run an analysis to see its sources.</div>
         <div id="sources-body" hidden>
@@ -195,15 +193,11 @@
         <div class="page-head">
           <span class="eyebrow">05 / Reports</span>
           <h1>My reports</h1>
-          <p>Analyses you have run, remembered by this browser only, and reports saved on the server.</p>
+          <p>Every analysis you have run.</p>
         </div>
         <div class="card">
-          <h2>Analyses in this browser</h2>
+          <h2>Saved analyses</h2>
           <ul class="items" id="my-analyses"></ul>
-        </div>
-        <div class="card">
-          <h2>Saved reports</h2>
-          <ul class="items" id="reports"></ul>
         </div>
       </section>
 
@@ -212,11 +206,10 @@
         <div class="page-head">
           <span class="eyebrow">06 / Setup</span>
           <h1>Services &amp; setup</h1>
-          <p>Which outside services are set up, your uploaded files, transcription jobs and what the tool can do so far.</p>
+          <p>Services, uploaded files and transcription jobs.</p>
         </div>
         <div class="card">
           <h2>Services</h2>
-          <p class="hint">Providers are chosen at the API stage. Until then each service shows what it needs; nothing falls back to demo data.</p>
           <div class="service-grid" id="services"></div>
         </div>
         <div class="two-col">
@@ -228,22 +221,6 @@
             <h2>Transcription jobs</h2>
             <p class="hint" id="model-status"></p>
             <ul class="items" id="jobs"></ul>
-          </div>
-        </div>
-        <div class="card">
-          <h2>Share price check</h2>
-          <form id="price-form" class="inline-form">
-            <input type="text" id="ticker" placeholder="Ticker, e.g. AAPL" required>
-            <input type="date" id="price-date" title="Leave empty for the latest completed trading session">
-            <button class="btn" type="submit">Check price</button>
-          </form>
-          <p class="message" id="price-result" role="status"></p>
-        </div>
-        <div class="card">
-          <h2>Feature status</h2>
-          <div class="status-grid">
-            <div><h3>Working</h3><ul id="working"></ul></div>
-            <div><h3>Awaiting implementation</h3><ul id="awaiting"></ul></div>
           </div>
         </div>
       </section>

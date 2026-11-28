@@ -10,7 +10,8 @@ def make_settings(tmp_path, **overrides) -> Settings:
     values = {"storage_dir": Path(tmp_path) / "store", "extra_market_closures": [], "sec_contact_email": "",
               "llm_provider": "", "llm_api_key": "", "llm_base_url": "", "text_model": "",
               "transcription_provider": "", "transcription_api_key": "", "transcription_base_url": "", "transcription_model": "",
-              "market_data_provider": "", "market_data_api_key": "", "market_data_base_url": "", "news_provider": "", "news_api_key": ""}
+              "market_data_provider": "", "market_data_api_key": "", "market_data_base_url": "",
+              "call_transcript_provider": "", "call_transcript_api_key": "", "call_transcript_base_url": ""}  # never the real .env keys
     values.update(overrides)
     return Settings(**values)
 
@@ -69,3 +70,16 @@ class FakeProvider:
 
 def json_bytes(obj) -> bytes:
     return json.dumps(obj).encode()
+
+
+def sample_services(as_of=None, transcript=None):
+    """The fictional sample company's stand-in services, in place of live ones (tests only)."""
+    from tests.sample.providers import demo_services
+    return demo_services()
+
+
+def sample_app(tmp_path, **overrides):
+    """The app with the fictional sample company plugged in through the analysis runner's test hook."""
+    from fastapi.testclient import TestClient
+    from backend import main
+    return TestClient(main.create_app(make_settings(tmp_path, **overrides), background_jobs=False, analysis_services=sample_services))

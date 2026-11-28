@@ -25,18 +25,18 @@ def test_the_page_has_the_six_sections_and_their_menu_items(page):
     assert "folio" in page and "Three agents. One evidence-led report." in page
 
 
-def test_the_real_form_controls_are_present_and_live_is_the_default(page):
+def test_the_real_form_controls_are_present_and_there_is_no_demo_mode(page):
     for control in ('id="analysis-form"', 'id="company"', 'id="language"', 'id="peers"', 'id="drop-zone"'):
         assert control in page, control
-    live = re.search(r'<input[^>]*name="mode"[^>]*value="live"[^>]*>', page).group(0)
-    demo = re.search(r'<input[^>]*name="mode"[^>]*value="demo"[^>]*>', page).group(0)
-    assert "checked" in live and "checked" not in demo  # demo mode is the user's explicit choice
+    script = (FRONTEND / "app.js").read_text(encoding="utf-8")
+    assert 'name="mode"' not in page and "demo" not in page.lower() and "demo" not in script.lower()
 
 
-def test_fields_the_backend_does_not_use_yet_are_disabled_and_labelled(page):
+def test_every_form_field_is_working_and_nothing_is_labelled_coming_later(page):
     tag = re.search(r'<textarea[^>]*id="extra-questions"[^>]*>', page).group(0)
-    assert "disabled" in tag
-    assert page.count("Coming later") >= 1
+    assert "disabled" not in tag and "Coming later" not in page
+    script = (FRONTEND / "app.js").read_text(encoding="utf-8")
+    assert 'questions: $("extra-questions").value.split' in script and "function questionsCard" in script
 
 
 def test_the_horizon_offers_3_5_or_10_years_with_5_as_the_default(page):
@@ -94,7 +94,70 @@ def test_the_financials_page_is_built_from_topic_cards_with_python_comparison_li
 
 def test_statements_read_as_text_under_topics_with_unverified_reasons_on_request():
     script = (FRONTEND / "app.js").read_text(encoding="utf-8")
-    for part in ("function proseItem", "function byTopic", '"Why unverified?"', "What the numbers show", "prose-heading"):
+    for part in ("function proseItem", "function byTopic", '"Why unverified?"', "Key comparisons", "prose-heading"):
         assert part in script, part
     overview = script[script.index("function renderOverviewTab"):script.index("// ---------- footnotes")]
     assert "citeButtons" not in overview and "notes.box()" in overview  # footnote numbers and a sources box, no [S1] buttons
+
+
+def test_news_and_the_integrated_assessment_tab_are_not_on_the_website(page):
+    """Decided 27 November 2026: news is removed for the presentation, and the Integrated assessment tab with it."""
+    script = (FRONTEND / "app.js").read_text(encoding="utf-8")
+    css = (FRONTEND / "styles.css").read_text(encoding="utf-8")
+    for text in (page, script, css):
+        assert "news" not in text.lower()
+    assert 'data-tab="call">Earnings call<' in page and "assessment" not in page.lower() and "renderAssessmentTab" not in script
+    assert "disagreementsCard" in script  # disagreements, when there are any, are shown on the Overview
+
+
+def test_the_dashboard_shows_the_bank_style_exhibits_without_grey_disclaimers():
+    script = (FRONTEND / "app.js").read_text(encoding="utf-8")
+    for part in ("function exhibitCards", "function keyDataBox", "exhibit-source", "Trading comparables", "Financial summary"):
+        assert part in script, part
+    for disclaimer in ("Click a row for its formula", "Missing years are left as gaps", "Each value is the median of the multiple"):
+        assert disclaimer not in script, disclaimer
+    css = (FRONTEND / "styles.css").read_text(encoding="utf-8")
+    assert "table.exhibit-table th" in css and ".key-data" in css
+
+
+def test_the_share_price_check_is_on_the_first_page_and_there_is_no_feature_list(page):
+    new_page = page[page.index('id="page-new"'):page.index('id="page-workflow"')]
+    assert 'id="price-form"' in new_page and 'id="price-date"' not in page  # the last close only, no date to pick
+    assert "Feature status" not in page and 'id="working"' not in page and 'id="awaiting"' not in page
+    script = (FRONTEND / "app.js").read_text(encoding="utf-8")
+    assert "features" not in script
+
+
+def test_my_reports_lists_the_analyses_kept_on_the_server(page):
+    script = (FRONTEND / "app.js").read_text(encoding="utf-8")
+    reports = script[script.index("async function renderMyReports"):script.index("// ---------- services and setup")]
+    assert 'api("/api/analyses")' in reports and 'method: "DELETE"' in reports
+    assert "folio.analyses" not in script and "/api/reports" not in script and "Saved analyses" in page
+
+
+def test_the_examples_on_the_form_name_a_real_company_not_the_old_demo(page):
+    assert "e.g. Microsoft or MSFT" in page and "Northgate" not in page
+
+
+def test_indicators_without_data_are_not_shown_on_the_dashboard():
+    script = (FRONTEND / "app.js").read_text(encoding="utf-8")
+    assert "const NO_DATA" in script and "NO_DATA.includes" in script
+
+
+def test_the_dashboard_opens_like_a_research_note(page):
+    script = (FRONTEND / "app.js").read_text(encoding="utf-8")
+    assert 'id="dash-eyebrow"' in page and "overview-top" in script and "Key comparisons" in script
+    assert "function verifiedFirst" in script
+
+
+def test_the_overview_lists_the_peers_chosen_beside_the_key_comparisons():
+    script = (FRONTEND / "app.js").read_text(encoding="utf-8")
+    assert "function peersChosenCard" in script and '"Peers chosen"' in script and "overview-side" in script
+    css = (FRONTEND / "styles.css").read_text(encoding="utf-8")
+    assert "grid-template-columns: minmax(0, 1fr) auto" in css  # the key-data box fits its card instead of overflowing
+
+
+def test_the_earnings_call_tab_shows_key_points_and_questions_with_answers():
+    script = (FRONTEND / "app.js").read_text(encoding="utf-8")
+    call = script[script.index("function renderCallTab"):script.index("function disagreementsCard")]
+    assert "Questions and answers" in call and "a2.call.questions" in call and '["management", "Key points"]' in script

@@ -48,10 +48,10 @@ class Settings:
     market_data_api_key: str = field(default_factory=lambda: _env("MARKET_DATA_API_KEY", ""), repr=False)
     market_data_base_url: str = field(default_factory=lambda: _env("MARKET_DATA_BASE_URL", ""))
     market_data_min_interval_seconds: float = field(default_factory=lambda: _env("MARKET_DATA_MIN_INTERVAL_SECONDS", 7.5, float))
-    # News search.
-    news_provider: str = field(default_factory=lambda: _env("NEWS_PROVIDER", ""))
-    news_api_key: str = field(default_factory=lambda: _env("NEWS_API_KEY", ""), repr=False)
-    news_base_url: str = field(default_factory=lambda: _env("NEWS_BASE_URL", ""))
+    # Earnings-call transcripts (Alpha Vantage, decided 27 November 2026).
+    call_transcript_provider: str = field(default_factory=lambda: _env("CALL_TRANSCRIPT_PROVIDER", ""))
+    call_transcript_api_key: str = field(default_factory=lambda: _env("CALL_TRANSCRIPT_API_KEY", ""), repr=False)
+    call_transcript_base_url: str = field(default_factory=lambda: _env("CALL_TRANSCRIPT_BASE_URL", ""))
 
     # Polite fetching
     user_agent: str = field(default_factory=lambda: _env("FETCH_USER_AGENT", "FinancialReportAnalysisAgent/0.1"))
@@ -110,7 +110,8 @@ class Settings:
             "temp_retention_days": self.temp_retention_days,
             "providers": {  # names only, never keys
                 "text_model": self.llm_provider or None, "transcription": self.transcription_provider or None,
-                "market_data": self.market_data_provider or None, "news": self.news_provider or None,
+                "market_data": self.market_data_provider or None,
+                "call_transcripts": self.call_transcript_provider or None,
             },
         }
 

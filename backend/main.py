@@ -25,56 +25,24 @@ from backend.fetchers.http_client import AccessDenied, FetchFailed, PoliteClient
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 
-FEATURES = {
-    "working": [
-        "Output language selection (English by default)",
-        "Document and audio/video uploads, labelled separately from retrieved sources",
-        "Recording transcription and translation (needs a configured speech-to-text provider, a text model for translation, and FFmpeg)",
-        "Background processing with progress and resume",
-        "Polite fetching: per-host rate and concurrency limits, robots.txt, retries",
-        "Document cache with 24-hour re-check and kept versions",
-        "Temporary-file cleanup after 7 days; saved reports kept until deleted",
-        "Price freshness rules for US exchanges",
-        "Peer selection from supplied candidate data",
-        "Demo data and demo stand-ins for each service, chosen with the Demo option for a whole analysis",
-        "Reading PDF, Word, Excel, HTML and text documents with page, section or sheet numbers, and finding the relevant pages (step 2)",
-        "63 indicators from v1.0 sections 5 and 6 (EV/sales and EV/EBIT historical medians added in v1.1) with sources, history, peer medians and historical medians; standardised FCF with the reported figure alongside",
-        "Choosing indicators by group or one by one; the report shows only the chosen ones",
-        "SEC figures read the way each report tags them (leases, debt, cover-page share counts, minority interests; a company's own D&A element from the full filing when no standard figure covers a twelve-month period); dividend yield estimated from cash dividends when no per-share amount is reported; percentage-point peer comparisons for every percentage measure",
-        "Choosing the horizon: 3, 5 (default) or 10 fiscal years of history, which also sets the window of revenue CAGR, multi-year FCF conversion and the historical medians",
-        "Demo analysis on the website: company, peers, Agents 1, 2 and 3 with every statement checked, shown as a report (steps 4 and 5a)",
-        "Report download as PDF (default) or Word, with the DEMO label on every page of a demo report (step 5b)",
-        "folio. website design: sidebar pages for a new analysis, agent workflow, dashboard with five tabs and a chart, sources and transcripts, my reports (in this browser) and services",
-        "Share prices from Twelve Data (actual and split-adjusted daily closes, latest completed session) for price-based indicators, returns and historical medians",
-        "Automatic peers for SEC filers: same SEC industry code, closest in revenue, labelled as limited comparability",
-        "Live analyses of SEC filers: figures from SEC EDGAR (XBRL), the latest 10-K and 10-Q read for the summary, an uploaded call transcript for Agent 2, text parts from the configured text model; share prices and news shown as not available",
-    ],
-    "awaiting_implementation": [
-        "A news provider; richer peer comparison (products, customers and regions) than the SEC industry code allows",
-        "Reports for companies outside SEC EDGAR (investor-relations sites, other regulators)",
-        "Gathering peer candidates automatically",
-        "Bank indicators (v1.0 section 8, part C) and the holding-company module (section 7, part D)",
-        "Extra questions in the New analysis form (shown as coming later)",
-        "Using uploaded reports in place of EDGAR filings; a list of past analyses kept on the server",
-    ],
-}
-
-
 class TranscriptionRequest(BaseModel):
     upload_id: str
     output_language: str | None = None
     check_against: list[str] = []
 
 
+MAX_QUESTIONS, MAX_QUESTION_LENGTH = 3, 300
+
+
 class AnalysisRequest(BaseModel):
     company: str
-    demo: bool = False  # demo mode is chosen by the user for the whole analysis
     output_language: str | None = None
     peers: list[str] = []
     as_of: date | None = None  # analysis date; reports published later are left out
     indicators: list[str] | None = None  # indicator ids to report; all when left out
     transcript_upload: str | None = None  # an uploaded earnings-call transcript for Agent 2 (live analyses)
     horizon_years: Literal[3, 5, 10] = 5  # fiscal years of history; also the window of the multi-year indicators
+    questions: list[str] = []  # the user's own questions, at most three, answered by Agent 3 from the sources only
 
 
 class PeerRequest(BaseModel):
@@ -84,7 +52,9 @@ class PeerRequest(BaseModel):
     requested_total: int | None = None
 
 
-def create_app(settings: Settings | None = None, provider_factory=None, run=None, background_jobs: bool = True, transport=None) -> FastAPI:
+def create_app(settings: Settings | None = None, provider_factory=None, run=None, background_jobs: bool = True, transport=None,
+               analysis_services=None) -> FastAPI:
+    """analysis_services: tests only, a function (as_of, transcript id) -> stand-in services for an analysis."""
     settings = settings or get_settings()
     store = storage.Store(settings.storage_dir)
     jobs = transcription.TranscriptionJobs(
@@ -100,7 +70,7 @@ def create_app(settings: Settings | None = None, provider_factory=None, run=None
         yield
 
     app = FastAPI(title="Financial Report Analysis Agent", lifespan=lifespan)
-    analyses = pipeline.AnalysisJobs(store, settings, transport)
+    analyses = pipeline.AnalysisJobs(store, settings, transport, analysis_services)
     app.state.settings, app.state.store, app.state.jobs, app.state.analyses = settings, store, jobs, analyses
 
     @app.middleware("http")
@@ -129,7 +99,7 @@ def create_app(settings: Settings | None = None, provider_factory=None, run=None
 
     @app.get("/api/config")
     def config():
-        return {**settings.public_view(), "ffmpeg_available": transcription.ffmpeg_available(), "features": FEATURES,
+        return {**settings.public_view(), "ffmpeg_available": transcription.ffmpeg_available(),
                 "services": services.service_status(settings),
                 "indicators": [{"id": s.id, "name": s.name, "group": s.group} for s in indicators.SPECS]}
 
@@ -221,6 +191,19 @@ def create_app(settings: Settings | None = None, provider_factory=None, run=None
 
     # ---- analyses (identify, peers, Agents 1-3) ----
 
+    @app.get("/api/analyses")
+    def list_analyses():
+        """Finished analyses kept on the server, newest first."""
+        return analyses.saved()
+
+    @app.delete("/api/analyses/{job_id}")
+    def delete_analysis(job_id: str):
+        try:
+            analyses.delete(job_id)
+        except KeyError:
+            raise HTTPException(404, "No such analysis.")
+        return {"deleted": job_id}
+
     @app.post("/api/analyses")
     def start_analysis(req: AnalysisRequest):
         if req.indicators is not None:
@@ -229,6 +212,9 @@ def create_app(settings: Settings | None = None, provider_factory=None, run=None
             unknown = sorted(set(req.indicators) - set(indicators.SPECS_BY_ID))
             if unknown:
                 raise HTTPException(400, f"Unknown indicators: {', '.join(unknown)}.")
+        questions = [q.strip() for q in req.questions if q.strip()]
+        if len(questions) > MAX_QUESTIONS or any(len(q) > MAX_QUESTION_LENGTH for q in questions):
+            raise HTTPException(400, f"Ask at most {MAX_QUESTIONS} questions of up to {MAX_QUESTION_LENGTH} characters each.")
         if req.transcript_upload:
             try:
                 upload = store.get(req.transcript_upload)
@@ -238,8 +224,8 @@ def create_app(settings: Settings | None = None, provider_factory=None, run=None
                 raise HTTPException(400, "The transcript must be a text, PDF, Word or HTML file; transcribe a recording first.")
         try:
             target = language.resolve_output_language(req.output_language, settings)
-            state = analyses.create(req.company, req.demo, target, req.peers, req.as_of or date.today(), req.indicators,
-                                    req.transcript_upload, req.horizon_years)
+            state = analyses.create(req.company, target, req.peers, req.as_of or date.today(), req.indicators,
+                                    req.transcript_upload, req.horizon_years, questions)
         except language.UnsupportedLanguage as exc:
             raise HTTPException(400, str(exc))
         except pipeline.CompanyNotFound as exc:
@@ -283,23 +269,9 @@ def create_app(settings: Settings | None = None, provider_factory=None, run=None
         except KeyError:
             raise HTTPException(404, "No report yet.")
         media_type, export = DOWNLOADS[kind]
-        name = f"{report['company']['ticker']}_analysis_{report['analysis_date']}{'_DEMO' if report.get('demo_label') else ''}.{kind}"
+        name = f"{report['company']['ticker']}_analysis_{report['analysis_date']}.{kind}"
         return Response(export(report_blocks.build(report)), media_type=media_type,
                         headers={"Content-Disposition": f'attachment; filename="{name}"'})
-
-    # ---- saved reports and maintenance ----
-
-    @app.get("/api/reports")
-    def reports():
-        return store.list_reports()
-
-    @app.delete("/api/reports/{report_id}")
-    def delete_report(report_id: str):
-        try:
-            store.delete_report(report_id)
-        except storage.NotFound:
-            raise HTTPException(404, "Report not found.")
-        return {"deleted": report_id}
 
     @app.post("/api/maintenance/cleanup")
     def cleanup():
@@ -308,10 +280,11 @@ def create_app(settings: Settings | None = None, provider_factory=None, run=None
     # ---- prices and peers ----
 
     @app.get("/api/prices/{ticker}")
-    def price(ticker: str, on: date | None = None):
+    def price(ticker: str):
+        """The last closing price: the latest completed trading session, never a price that is still moving."""
         client = PoliteClient(settings)
         try:
-            return market_data.get_closing_price(ticker, settings, client, on_date=on).to_dict()
+            return market_data.get_closing_price(ticker, settings, client).to_dict()
         except AccessDenied as exc:
             raise HTTPException(503, f"Price unavailable: {exc}. The provider does not permit automated access; "
                                      "a provider with an official API is needed.")

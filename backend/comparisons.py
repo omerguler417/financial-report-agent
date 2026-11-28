@@ -178,7 +178,10 @@ def _own_history(ind: str, current: dict, history: dict) -> str:
     if len(points) < 2:
         return "—"
     (fy1, a), (fy2, b) = points[0], points[-1]
-    return f"{display(a['value'], a['unit'])} ({fy1}) → {display(b['value'], b['unit'])} ({fy2})"
+
+    def short(r):  # the unit is in the row's value already; per-share amounts lose their long label here
+        return display(r["value"], r["unit"]) if r["unit"] in ("x", "fraction") else f"{r['value']:,.2f}"
+    return f"{short(a)} → {short(b)} ({fy1}–{fy2})"
 
 
 def _cells(current: dict, comparison: dict, history: dict) -> dict:

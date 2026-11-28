@@ -1,5 +1,5 @@
 // folio. website: page navigation, running an analysis (progress, company choice, missing-services list), the agent workflow,
-// the dashboard (metrics, five tabs, chart, printable report), sources and transcripts, my reports (remembered in this browser)
+// the dashboard (metrics, four tabs, chart, printable report), sources and transcripts, my reports (remembered in this browser)
 // and services and setup (uploads, transcription jobs, price check, service status).
 // Every figure shown comes from the backend, already calculated and formatted in Python; this file does no financial arithmetic.
 // The only calculations here place points on the chart drawing.
@@ -87,14 +87,6 @@ function updateBreadcrumb() {
   if (company && ["workflow", "dashboard", "sources"].includes(currentPage())) crumb.appendChild(el("span", ` / ${company.name} (${company.ticker})`));
 }
 
-function renderDemoBanner() {
-  const banner = $("demo-banner");
-  if (S.report && S.report.demo_label) banner.textContent = S.report.demo_label;
-  else if (S.running && S.running.demo) banner.textContent = "Demo analysis: fictional sample data, not real";
-  else { banner.hidden = true; return; }
-  banner.hidden = false;
-}
-
 // ---------- configuration ----------
 
 async function loadConfig() {
@@ -109,7 +101,7 @@ async function loadConfig() {
   select.addEventListener("change", () => remember("folio.language", select.value));
   renderIndicatorPicker(S.config.indicators || []);
   loadTranscriptChoices();
-  $("upload-limits").textContent = `Uploads (up to ${S.config.max_upload_mb} MB per file, ${S.config.max_recording_hours} hours per recording) are kept with your files under Services & setup and labelled as uploads. They are not yet used in the analysis.`;
+  $("upload-limits").textContent = `Up to ${S.config.max_upload_mb} MB per file, ${S.config.max_recording_hours} hours per recording.`;
 }
 
 // ---------- choosing indicators ----------
@@ -173,9 +165,9 @@ function updateIndicatorCount() {
 function resetForm() {  // "New analysis": an empty form; an analysis that is running carries on under Agent workflow
   $("company").value = "";
   $("peers").value = "";
+  $("extra-questions").value = "";
   $("horizon").value = "5";
   $("transcript-upload").value = "";
-  document.querySelector('input[name="mode"][value="live"]').checked = true;
   $("analysis-status").replaceChildren();
   if (S.config) renderIndicatorPicker(S.config.indicators || []);
   if (currentPage() === "new") showPage();
@@ -187,7 +179,6 @@ async function runAnalysis(event, chosenTicker) {
   const box = $("analysis-status");
   const company = chosenTicker || $("company").value.trim();
   if (!company) { box.replaceChildren(el("p", "Enter a company name or ticker.", "error")); return; }
-  const demo = document.querySelector('input[name="mode"]:checked').value === "demo";
   const peers = $("peers").value.split(",").map((p) => p.trim()).filter(Boolean);
   const choice = chosenIndicators();
   if (choice.all && !choice.ticked.length) { box.replaceChildren(el("p", "Choose at least one indicator.", "error")); return; }
@@ -196,8 +187,9 @@ async function runAnalysis(event, chosenTicker) {
   const response = await fetch("/api/analyses", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ company, demo, peers, indicators: indicators, output_language: $("language").value,
-      transcript_upload: $("transcript-upload").value || null, horizon_years: Number($("horizon").value) }),
+    body: JSON.stringify({ company, peers, indicators: indicators, output_language: $("language").value,
+      transcript_upload: $("transcript-upload").value || null, horizon_years: Number($("horizon").value),
+      questions: $("extra-questions").value.split("\n").map((q) => q.trim()).filter(Boolean) }),
   });
   const body = await response.json().catch(() => ({}));
   if (response.status === 409) {  // several companies match: the user chooses
@@ -222,19 +214,11 @@ async function runAnalysis(event, chosenTicker) {
     return;
   }
   box.replaceChildren(el("p", "Started. Follow it under Agent workflow.", "hint"));
-  rememberAnalysis(body);
   clearAnalysis();
   S.runningId = body.id;
   S.running = body;
-  renderDemoBanner();
   location.hash = "#workflow";
   pollAnalysis(body.id);
-}
-
-function rememberAnalysis(state) {
-  const list = recall("folio.analyses", []).filter((a) => a.id !== state.id);
-  list.unshift({ id: state.id, ticker: state.company.ticker, name: state.company.name, demo: state.demo, as_of: state.as_of, created_at: state.created_at });
-  remember("folio.analyses", list.slice(0, 50));
 }
 
 async function pollAnalysis(id, failures = 0) {
@@ -261,6 +245,8 @@ function clearAnalysis() {
   S.figureSources = {};
   $("dash-empty").hidden = false;
   $("dash-body").hidden = true;
+  $("dash-head").classList.remove("masthead");
+  $("dash-eyebrow").textContent = "03 / Dashboard";
   $("dash-title").textContent = "Analysis dashboard";
   $("dash-sub").textContent = "The results of the current analysis.";
   $("sources-empty").hidden = false;
@@ -268,7 +254,6 @@ function clearAnalysis() {
   $("source-summary").replaceChildren(el("p", "Appears after an analysis has run.", "empty"));
   $("transcript-view").replaceChildren();
   renderTranscriptPicker();
-  renderDemoBanner();
 }
 
 async function openAnalysis(id) {
@@ -278,7 +263,6 @@ async function openAnalysis(id) {
   S.runningId = id;
   remember("folio.current", id);
   buildSources(report);
-  renderDemoBanner();
   renderDashboard();
   renderSources();
   renderSourceSummary();
@@ -294,16 +278,16 @@ async function openAnalysis(id) {
 
 const STEPS = [
   { key: "sources", parts: ["identify", "peers"], no: "Step 1", title: "Source discovery", cls: "",
-    text: "Finds the company, chooses three to five comparable peers and gathers the reports, the earnings call and the news." },
+    text: "Finds the company, its peers, reports and earnings call." },
   { key: "agent1", parts: ["agent1"], no: "Agent 1", title: "Financial analyst", cls: "agent-1",
-    text: "Reads the reports into numbered pages, checks every extracted figure against its page, calculates the indicators in Python and compares them with history and peers." },
-  { key: "agent2", parts: ["agent2"], no: "Agent 2", title: "Meeting & news analyst", cls: "agent-2",
-    text: "Keeps management statements, guidance and analysts' questions on the earnings call apart, and reviews relevant news since the latest results." },
+    text: "Reads the reports and calculates the indicators." },
+  { key: "agent2", parts: ["agent2"], no: "Agent 2", title: "Earnings-call analyst", cls: "agent-2",
+    text: "Analyses the earnings call." },
   { key: "agent3", parts: ["agent3", "save"], no: "Agent 3", title: "Report combiner", cls: "agent-3",
-    text: "Combines both agents into one report: overview, where the sources disagree, risks, what is missing and what could not be verified." },
+    text: "Writes the combined report." },
 ];
 const STEP_NAMES = { queued: "Waiting to start", identify: "Finding the company", peers: "Choosing peers", agent1: "Agent 1: reports and indicators",
-  agent2: "Agent 2: earnings call and news", agent3: "Agent 3: combined report", save: "Saving the report" };
+  agent2: "Agent 2: earnings call", agent3: "Agent 3: combined report", save: "Saving the report" };
 
 function stepState(step, state) {
   if (step.parts.every((p) => state.steps_done.includes(p))) return "done";
@@ -316,9 +300,9 @@ function stepDetail(key) {
   const r = S.report;
   if (!r) return "";
   const a1 = r.agent1, a2 = r.agent2, a3 = r.agent3;
-  if (key === "sources") return `${r.peers.peers.length} peers chosen, ${r.peers.excluded.length} left out · ${a1.documents.length} company reports · ${a2.call.documents.length} call transcript(s) · ${a2.news.included.length} news items used`;
+  if (key === "sources") return `${r.peers.peers.length} peers chosen, ${r.peers.excluded.length} left out · ${a1.documents.length} company reports · ${a2.call.documents.length} call transcript(s)`;
   if (key === "agent1") return `${a1.documents.length} reports read · ${a1.extraction_check.accepted} figures checked and used · ${a1.extraction_check.rejected.length} rejected · ${a1.summary.length} summary statements`;
-  if (key === "agent2") return `${a2.call.statements.length} call statements · ${a2.news.included.length} news items used, ${a2.news.excluded.length} left out`;
+  if (key === "agent2") return `${a2.call.statements.length} call statements`;
   return `${a3.statement_check.checked} statements checked across the agents · ${a3.statement_check.unverified} unverified`;
 }
 
@@ -327,8 +311,7 @@ function renderWorkflow(state) {
   const info = el("div", null, "grow");
   info.appendChild(el("h2", `${state.company.name} (${state.company.ticker})`));
   const line = el("p");
-  line.appendChild(el("span", state.demo ? "Demo" : "Live", `pill ${state.demo ? "demo" : "live"}`));
-  line.appendChild(document.createTextNode(`  ${state.status === "completed" ? "Completed" : state.status === "failed" ? "Failed" : STEP_NAMES[state.current_step] || state.current_step}`));
+  line.appendChild(document.createTextNode(`${state.status === "completed" ? "Completed" : state.status === "failed" ? "Failed" : STEP_NAMES[state.current_step] || state.current_step}`));
   info.appendChild(line);
   const bar = el("progress");
   bar.max = 100;
@@ -365,7 +348,6 @@ function renderWorkflow(state) {
 
 function sourceKey(c) {
   if (c.indicator) return `calc|${c.indicator}|${c.period}`;
-  if (c.publisher && c.doc_id) return `news|${c.doc_id}`;
   if (c.doc_id && c.page == null && c.tag) return `xbrl|${c.doc_id}|${c.tag}`;
   if (c.doc_id) return `doc|${c.doc_id}|${c.page}`;
   if (c.publisher) return `price|${c.publisher}|${c.date}`;
@@ -377,7 +359,7 @@ function addSource(c, usedFor) {
   if (!key) return null;
   let s = S.sourceIndex[key];
   if (!s) {
-    const type = key.startsWith("calc") ? "calculated" : key.startsWith("news") ? "news" : key.startsWith("price") ? "price"
+    const type = key.startsWith("calc") ? "calculated" : key.startsWith("price") ? "price"
       : S.transcriptIds.has(c.doc_id) ? "call" : "report";
     s = { n: S.sources.length + 1, key, type, citation: c, lines: [], usedFor: [] };
     S.sources.push(s);
@@ -394,7 +376,7 @@ function buildSources(r) {
   S.figureSources = {};
   S.transcriptIds = new Set(r.agent2.call.documents.map((d) => d.doc_id));
   const statements = [...r.agent3.overview, ...r.agent3.disagreements.flatMap((d) => d.positions), ...r.agent3.risks,
-    ...r.agent1.summary, ...r.agent2.call.statements, ...r.agent2.news.included.map((i) => ({ text: i.channel, citations: i.citations }))];
+    ...r.agent1.summary, ...r.agent2.call.statements, ...(r.agent2.call.questions || []).flatMap((q) => [q.question, q.answer])];
   for (const s of statements) for (const c of s.citations || []) addSource(c, s.text);
   for (const result of r.agent1.indicators.current) {
     const list = [];
@@ -408,7 +390,7 @@ function buildSources(r) {
   }
 }
 
-const SOURCE_TYPES = { report: "Company report", call: "Earnings call", news: "News", calculated: "Calculated", price: "Price" };
+const SOURCE_TYPES = { report: "Company report", call: "Earnings call", calculated: "Calculated", price: "Price" };
 
 function sourceTitle(s) {
   const c = s.citation;
@@ -420,10 +402,9 @@ function sourceTitle(s) {
 function sourceWhere(s) {
   const c = s.citation;
   if (s.type === "calculated") return c.period;
-  if (s.type === "news") return `${c.publisher} · ${c.published}`;
   if (s.type === "price") return `${c.exchange ? c.exchange + " · " : ""}close ${c.date}`;
   if (c.page == null && c.section) return `${c.section} · ${c.tag || ""}`;
-  return `p. ${c.page}`;
+  return c.page_unit === "turn" ? `turn ${c.page}` : `p. ${c.page}`;  // a call transcript is cited by speaker turn
 }
 
 function citeButtons(citations) {
@@ -440,7 +421,6 @@ function openSource(s) {
   add("Where", sourceWhere(s));
   const url = s.citation.url;
   if (url && /^https?:\/\//.test(url)) add("Link", link(url, url));
-  if (s.citation.demo) add("Note", "Fictional demo source");
   body.replaceChildren(facts);
   if (s.lines.length) {
     body.appendChild(el("h3", "Cited text"));
@@ -475,7 +455,7 @@ function renderSources() {
   $("sources-body").hidden = false;
   const chips = $("source-chips");
   chips.replaceChildren();
-  for (const [key, label] of [["all", "All"], ["report", "Company reports"], ["call", "Earnings call"], ["news", "News"], ["calculated", "Calculated"], ["price", "Prices"]]) {
+  for (const [key, label] of [["all", "All"], ["report", "Company reports"], ["call", "Earnings call"], ["calculated", "Calculated"], ["price", "Prices"]]) {
     const count = key === "all" ? S.sources.length : S.sources.filter((s) => s.type === key).length;
     const chip = button(`${label} (${count})`, () => { S.filter = key; renderSources(); }, `chip ${S.filter === key ? "active" : ""}`);
     chips.appendChild(chip);
@@ -506,8 +486,6 @@ function renderSourceSummary() {
   const row = (label, value) => { const li = el("li"); li.append(el("span", label), el("strong", String(value))); list.appendChild(li); };
   row("Company reports read", r.agent1.documents.length);
   row("Earnings-call transcripts", r.agent2.call.documents.length);
-  row("News items used", r.agent2.news.included.length);
-  row("News items left out", r.agent2.news.excluded.length);
   row("Statements checked", r.agent3.statement_check.checked);
   row("Unverified statements", r.agent3.statement_check.unverified);
   const box = $("source-summary");
@@ -590,6 +568,25 @@ function proseItem(st, notes, tag) {  // one statement as plain reading text; "U
   return item;
 }
 
+function peersChosenCard(r) {
+  const box = card("Peers chosen");
+  if (!r.peers.peers.length) {
+    box.appendChild(el("p", "No suitable peers were found.", "empty"));
+    return box;
+  }
+  const list = el("dl", null, "key-data peers-list");
+  for (const p of r.peers.peers) {
+    list.appendChild(el("dt", p.ticker));
+    list.appendChild(el("dd", p.name));
+  }
+  box.appendChild(list);
+  return box;
+}
+
+function verifiedFirst(statements) {  // unverified statements stay visible and labelled, after the verified ones
+  return [...statements].sort((a, b) => (a.label === "unverified") - (b.label === "unverified"));
+}
+
 function statementList(statements, notes, tagFor) {
   const list = el("div", null, "prose");
   if (!statements.length) list.appendChild(el("p", "Nothing to show.", "empty"));
@@ -618,13 +615,16 @@ function renderDashboard() {
   const r = S.report;
   $("dash-empty").hidden = true;
   $("dash-body").hidden = false;
-  $("dash-title").textContent = `${r.company.name} (${r.company.ticker})`;
-  $("dash-sub").textContent = `Analysis date ${r.analysis_date} · ${r.mode} mode · current period ${r.agent1.indicators.current_period} · indicator definitions ${r.agent1.indicators.definition_version}`;
+  const ind = r.agent1.indicators;  // the masthead of a research note
+  $("dash-head").classList.add("masthead");
+  $("dash-eyebrow").textContent = `Company analysis · ${r.analysis_date}`;
+  $("dash-title").textContent = r.company.name;
+  $("dash-sub").textContent = [r.company.ticker, ind.current_period.replace("TTM to ", "LTM "), `${ind.horizon_years || 5}-year horizon`,
+    r.peers.peers.length ? `Peers: ${r.peers.peers.map((p) => p.ticker).join(", ")}` : "No peers"].join(" · ");
   renderMetrics();
   renderOverviewTab();
   renderFinancialsTab();
-  renderMeetingsTab();
-  renderAssessmentTab();
+  renderCallTab();
   renderReportTab();
 }
 
@@ -655,18 +655,17 @@ function renderMetrics() {
 
 function renderOverviewTab() {
   const r = S.report, a3 = r.agent3, cmp = comparisonsView();
-  const overview = card("Overview", "agent-3", "Agent 3");
+  const overview = card("Summary", "agent-3", "Agent 3");
   const notes = footnotes();
-  overview.appendChild(statementList(a3.overview, notes, basedOnTag));
+  overview.appendChild(statementList(verifiedFirst(a3.overview), notes, basedOnTag));
   overview.appendChild(notes.box());
 
-  const numbers = card("What the numbers show", "agent-1", "Agent 1 · calculated in Python");
+  const numbers = card("Key comparisons", "agent-1", "Agent 1 · calculated in Python");
   const numberNotes = footnotes();
   const list = el("dl", null, "numbers-summary");
   for (const g of cmp.groups) {
-    const lead = g.lines.filter((l) => l.kind === "summary");
     const first = g.lines.find((l) => l.kind !== "summary" && l.kind !== "trend");
-    const chosen = [...lead, ...(first ? [first] : [])];
+    const chosen = first ? [first] : [];
     if (!chosen.length) continue;
     list.appendChild(el("dt", g.group));
     const dd = el("dd");
@@ -675,16 +674,23 @@ function renderOverviewTab() {
   }
   if (list.children.length) {
     numbers.appendChild(list);
-    const more = button("See every comparison under Financials & peers →", () => activateTab("financials"), "link-button");
+    const more = button("All comparisons →", () => activateTab("financials"), "link-button");
     numbers.appendChild(more);
     numbers.appendChild(numberNotes.box());
   } else numbers.appendChild(el("p", "No comparisons are available for this analysis.", "empty"));
 
   const risks = card("Risks", "agent-3", "Agent 3");
   const riskNotes = footnotes();
-  risks.appendChild(statementList(a3.risks, riskNotes, basedOnTag));
+  risks.appendChild(statementList(verifiedFirst(a3.risks), riskNotes, basedOnTag));
   risks.appendChild(riskNotes.box());
-  $("tab-overview").replaceChildren(overview, numbers, risks);
+  const ex = exhibitsView();
+  const keyData = ex ? card("Key data") : null;
+  if (keyData) keyData.appendChild(keyDataBox(ex.key_data.map((row) => [row.label, row.value])));
+  const side = el("div", null, "overview-side");  // key data and the peers, beside the key comparisons
+  side.append(...[keyData, peersChosenCard(r)].filter(Boolean));
+  const top = el("div", null, "overview-top");  // as on a research note's first page
+  top.append(numbers, side);
+  $("tab-overview").replaceChildren(...[top, overview, questionsCard(), disagreementsCard(), risks].filter(Boolean));
 }
 
 // ---------- footnotes: small numbers by the data, one expandable "Sources" box per card ----------
@@ -796,6 +802,7 @@ function resultSources(indicator, period) {  // the sources of the figures a cal
 
 // ---------- financials: one card per topic, comparison lines first, compact table, details on click ----------
 
+const NO_DATA = ["missing", "not_applicable"];  // shown in the report's appendices, not on the dashboard
 const FIN_GROUPS = ["Valuation", "Profitability", "Debt and liquidity", "Cash flow and dividends", "Growth", "Per share and market"];
 const KEY_HISTORY = ["Revenue growth", "Net profit margin", "Common ROE", "EBITDA margin", "FCF margin", "Net debt/EBITDA", "Current ratio"];
 
@@ -836,9 +843,9 @@ function findingsPanel(lines, notes, title = "What the comparison shows") {  // 
 function renderFinancialsTab() {
   const r = S.report, cmp = comparisonsView();
   const groupOf = Object.fromEntries(((S.config && S.config.indicators) || []).map((x) => [x.id, x.group]));
-  const parts = [peersCard(r)];
+  const parts = [peersCard(r), ...exhibitCards()];
   for (const group of FIN_GROUPS) {
-    const results = r.agent1.indicators.current.filter((x) => groupOf[x.indicator] === group);
+    const results = r.agent1.indicators.current.filter((x) => groupOf[x.indicator] === group && !NO_DATA.includes(x.status));
     if (results.length) parts.push(groupCard(group, results, cmp));
   }
   const ownHistory = historyAgainstPeersCard(cmp);
@@ -850,6 +857,25 @@ function renderFinancialsTab() {
   summary.appendChild(notes.box());
   parts.push(summary);
   $("tab-financials").replaceChildren(...parts);
+}
+
+function exhibitsView() { return (S.view && S.view.exhibits) || null; }
+
+function exhibitCards() {  // the financial summary and the trading comparables, as in a bank's company report
+  const ex = exhibitsView();
+  if (!ex) return [];
+  const out = [];
+  if (ex.financial_summary.rows.length) {
+    const box = card("Financial summary", "agent-1", "Agent 1 · calculated in Python");
+    box.appendChild(simpleTable({ ...ex.financial_summary, source: "Source: company reports and filings; folio. calculations." }));
+    out.push(box);
+  }
+  if (ex.comparables.rows.length > 1) {
+    const box = card(`Trading comparables (${ex.comparables.period})`, "agent-1", "Agent 1 · calculated in Python");
+    box.appendChild(simpleTable({ ...ex.comparables, source: "Source: company reports and filings; share prices; folio. calculations." }));
+    out.push(box);
+  }
+  return out;
 }
 
 function peersCard(r) {
@@ -887,7 +913,7 @@ function groupCard(group, results, cmp) {
   const summary = (cmp.groups.find((g) => g.group === group) || {}).lines || [];
   const { rows: formatted } = keyFigureRows();
   const wrap = el("div", null, "table-wrap");
-  const t = el("table", null, "compact");
+  const t = el("table", null, "compact exhibit-table");
   const head = el("tr");
   for (const h of ["Indicator", "Value", "Peer median", "Difference", "Own history"]) head.appendChild(el("th", h));
   t.appendChild(head);
@@ -917,8 +943,6 @@ function groupCard(group, results, cmp) {
   }
   wrap.appendChild(t);
   box.appendChild(wrap);
-  box.appendChild(el("p", "Click a row for its formula, notes, each peer's value and its sources. Differences describe the gap to the peer "
-    + "median (pp = percentage points); they are not valuation verdicts.", "hint"));
   if (summary.length) box.appendChild(findingsPanel(summary, notes));
   box.appendChild(notes.box());
   return box;
@@ -950,7 +974,8 @@ function details(result, cells, statusText, cmp, notes) {
 }
 
 function historyAgainstPeersCard(cmp) {
-  const bases = Object.keys(cmp.cells).filter((id) => id.endsWith("_hist_median"));
+  const current0 = Object.fromEntries(S.report.agent1.indicators.current.map((x) => [x.indicator, x]));
+  const bases = Object.keys(cmp.cells).filter((id) => id.endsWith("_hist_median") && current0[id] && !NO_DATA.includes(current0[id].status));
   if (!bases.length) return null;
   const current = Object.fromEntries(S.report.agent1.indicators.current.map((x) => [x.indicator, x]));
   const horizon = S.report.agent1.indicators.horizon_years || 5;
@@ -959,7 +984,7 @@ function historyAgainstPeersCard(cmp) {
   const lines = (cmp.groups.find((g) => g.group === "Historical comparison") || {}).lines || [];
   const peers = cmp.peers || [];
   const wrap = el("div", null, "table-wrap");
-  const t = el("table", null, "compact");
+  const t = el("table", null, "compact exhibit-table");
   const head = el("tr");
   for (const h of ["Median of the multiple", S.report.company.ticker, ...peers, "Peer median"]) head.appendChild(el("th", h));
   t.appendChild(head);
@@ -977,8 +1002,6 @@ function historyAgainstPeersCard(cmp) {
   }
   wrap.appendChild(t);
   box.appendChild(wrap);
-  box.appendChild(el("p", "Each value is the median of the multiple at the company's or peer's own past fiscal year ends, each from the "
-    + "price and the reports published by that date.", "hint"));
   if (lines.length) box.appendChild(findingsPanel(lines, notes));
   box.appendChild(notes.box());
   return box;
@@ -993,26 +1016,37 @@ function byYearCard() {
     if (key.rows.length) box.appendChild(simpleTable(key));
     const all = el("details", null, "more");
     all.appendChild(el("summary", `Show all ${hist.rows.length} indicators by fiscal year`));
-    all.appendChild(simpleTable(hist));
+    all.appendChild(simpleTable({ ...hist, notes: [] }));
     box.appendChild(all);
   }
   return box;
 }
 
-function simpleTable(block) {
-  const wrap = el("div", null, "table-wrap");
-  const t = el("table");
+function simpleTable(block) {  // an exhibit (title, figures right-aligned, source underneath) or a plain table
+  const wrap = el("div", null, `table-wrap${block.title ? " exhibit" : ""}`);
+  if (block.title) wrap.appendChild(el("div", block.title, "exhibit-title"));
+  const t = el("table", null, block.title ? "exhibit-table" : "");
   const head = el("tr");
   for (const c of block.columns) head.appendChild(el("th", c));
   t.appendChild(head);
   for (const row of block.rows) {
-    const tr = el("tr");
+    const tr = el("tr", null, row[0] === "Peer median" ? "median-row" : "");
     row.forEach((cell, i) => tr.appendChild(el("td", cell, i ? "num" : "")));
     t.appendChild(tr);
   }
   wrap.appendChild(t);
+  if (block.source) wrap.appendChild(el("p", block.source, "exhibit-source"));
   for (const note of block.notes || []) wrap.appendChild(el("p", note, "hint"));
   return wrap;
+}
+
+function keyDataBox(rows) {  // the report's key data: share price, market value, enterprise value, period and horizon
+  const box = el("dl", null, "key-data");
+  for (const [label, value] of rows) {
+    box.appendChild(el("dt", label));
+    box.appendChild(el("dd", value));
+  }
+  return box;
 }
 
 function chart() {
@@ -1072,96 +1106,91 @@ function chart() {
     legend.appendChild(item);
   }
   box.appendChild(legend);
-  box.appendChild(el("p", "Missing years are left as gaps, never filled. Values and labels come from the Python calculations.", "hint"));
   return box;
 }
 
-function renderMeetingsTab() {
+const CALL_GROUPS = [["management", "Key points"], ["guidance", "Guidance"], ["analyst", "Analyst questions and assumptions"]];
+
+function renderCallTab() {  // the earnings call, grouped by who is speaking; an analyst's assumption is not a fact
   const a2 = S.report.agent2;
   const call = card("Earnings call", "agent-2", "Agent 2");
-  if (a2.call.documents.length) call.appendChild(el("p", `${a2.call.documents[0].title}. Management statements, guidance and analysts' questions are kept apart; an analyst's assumption is not a fact.`, "hint"));
-  for (const s of a2.call.statements) {
-    const quote = el("blockquote", null, `quote ${s.kind} ${s.label === "unverified" ? "unverified" : ""}`);
-    quote.appendChild(el("div", `${KIND[s.kind] || s.kind} · ${s.speaker}`, "quote-who"));
-    const p = el("p", s.text);
-    p.append(...citeButtons(s.citations));
-    quote.appendChild(p);
-    for (const issue of s.issues) quote.appendChild(el("div", issue, "issue"));
-    call.appendChild(quote);
+  const notes = footnotes();
+  const doc = a2.call.documents[0];
+  if (doc) call.appendChild(el("p", doc.title, "source-line"));
+  for (const [kind, title] of CALL_GROUPS) {
+    const chosen = a2.call.statements.filter((st) => st.kind === kind);
+    if (!chosen.length) continue;
+    call.appendChild(el("h3", title, "prose-heading"));
+    call.appendChild(statementList(chosen, notes, (st) => st.speaker));
+  }
+  const other = a2.call.statements.filter((st) => !CALL_GROUPS.some(([kind]) => kind === st.kind));
+  if (other.length) call.appendChild(statementList(other, notes, (st) => st.speaker));
+  const questions = a2.call.questions || [];
+  if (questions.length) {  // each analyst's question, then the summary of the answer
+    call.appendChild(el("h3", "Questions and answers", "prose-heading"));
+    const list = el("div", null, "qa-list");
+    for (const q of questions) {
+      const pair = el("div", null, "qa-pair");
+      pair.appendChild(proseItem(q.question, notes, `Question · ${q.analyst}`));
+      pair.appendChild(proseItem(q.answer, notes, `Answer · ${q.answered_by}`));
+      list.appendChild(pair);
+    }
+    call.appendChild(list);
   }
   if (!a2.call.statements.length) call.appendChild(el("p", "No earnings-call material was available.", "empty"));
-
-  const news = card("News", "agent-2", "Agent 2");
-  news.appendChild(el("p", `Since the latest results announcement (${a2.news.since}), plus older items that are still material. Timing alone does not show that news moved the share price.`, "hint"));
-  for (const item of a2.news.included) {
-    const box = el("div", null, `news-item ${item.verified ? "" : "unverified"}`);
-    const meta = el("div", `${item.published} · ${item.publisher} `, "news-meta");
-    if (!item.recent) meta.appendChild(el("span", "older item, still material", "pill"));
-    box.appendChild(meta);
-    const title = el("strong");
-    title.appendChild(/^https?:\/\//.test(item.url) ? link(item.title, item.url) : document.createTextNode(item.title));
-    box.appendChild(title);
-    const p = el("p");
-    if (!item.verified) p.appendChild(el("span", "Unverified", "badge-unverified"));
-    p.appendChild(document.createTextNode(item.channel));
-    p.append(...citeButtons(item.citations));
-    box.appendChild(p);
-    for (const issue of item.issues) box.appendChild(el("div", issue, "issue"));
-    news.appendChild(box);
-  }
-  if (a2.news.excluded.length) {
-    news.appendChild(el("h3", "Left out"));
-    const list = el("ul", null, "plain-list");
-    for (const e of a2.news.excluded) list.appendChild(el("li", `${e.published} · ${e.title}: ${e.reason}`));
-    news.appendChild(list);
-  }
-  $("tab-meetings").replaceChildren(call, news);
+  if (!a2.call.statements.length) for (const note of a2.notes || []) call.appendChild(el("p", note, "empty"));  // why there is no call
+  call.appendChild(notes.box());
+  $("tab-call").replaceChildren(call);
 }
 
-function renderAssessmentTab() {
-  const r = S.report, a3 = r.agent3;
-  const disagreements = card("Where the sources disagree", "agent-3", "Agent 3");
-  if (!a3.disagreements.length) disagreements.appendChild(el("p", "No disagreements were identified.", "empty"));
-  for (const d of a3.disagreements) {
-    disagreements.appendChild(el("h3", d.topic));
-    for (const p of d.positions) {
-      const box = el("div", null, `position ${p.verified ? "" : "unverified"}`);
-      const who = el("div", null, "statement-tag");
-      who.appendChild(el("strong", `${p.who} `));
-      for (const origin of p.based_on || []) who.appendChild(el("span", origin, `pill ${agentClass(origin)}`));
-      box.appendChild(who);
-      const text = el("div", p.text);
-      text.append(...citeButtons(p.citations));
-      box.appendChild(text);
-      for (const issue of p.issues) box.appendChild(el("div", issue, "issue"));
-      disagreements.appendChild(box);
-    }
-    if (d.note) disagreements.appendChild(el("p", d.note, "hint"));
+function questionsCard() {  // the user's own questions, shown on the Overview only when there are any
+  const questions = S.report.agent3.questions || [];
+  if (!questions.length) return null;
+  const box = card("Your questions", "agent-3", "Agent 3");
+  const notes = footnotes();
+  for (const q of questions) {
+    box.appendChild(el("h3", q.question, "prose-heading"));
+    if (q.statements.length) box.appendChild(statementList(q.statements, notes));
+    else box.appendChild(el("p", q.note, "empty"));
   }
-  const unverified = card("Not verified", "agent-3", "All agents");
-  const list = el("ul", null, "plain-list warn-list");
-  for (const u of a3.unverified_statements) list.appendChild(el("li", `${u.agent}: “${u.text}” — ${u.issues.join(" ")}`));
-  if (!a3.unverified_statements.length) list.appendChild(el("li", "Every statement was verified."));
-  unverified.appendChild(list);
-  const missing = card("Missing information");
-  const missingList = el("ul", null, "plain-list");
-  for (const m of a3.missing_information) missingList.appendChild(el("li", m));
-  if (!a3.missing_information.length) missingList.appendChild(el("li", "Nothing missing was recorded."));
-  missing.appendChild(missingList);
-  const limits = card("Limitations");
-  const limitList = el("ul", null, "plain-list");
-  for (const l of [...a3.limitations, ...(r.notes || [])]) limitList.appendChild(el("li", l));
-  limits.appendChild(limitList);
-  $("tab-assessment").replaceChildren(disagreements, unverified, missing, limits);
+  box.appendChild(notes.box());
+  return box;
+}
+
+function disagreementsCard() {  // shown on the Overview only when Agent 3 found any
+  const a3 = S.report.agent3;
+  if (!a3.disagreements.length) return null;
+  const box = card("Where the sources disagree", "agent-3", "Agent 3");
+  const notes = footnotes();
+  for (const d of a3.disagreements) {
+    box.appendChild(el("h3", d.topic, "prose-heading"));
+    box.appendChild(statementList(d.positions, notes, (p) => [p.who, ...(p.based_on || [])].filter(Boolean).join(" · ")));
+    if (d.note) box.appendChild(el("p", d.note, "hint"));
+  }
+  box.appendChild(notes.box());
+  return box;
 }
 
 // ---------- final report (same blocks as the PDF and Word files) ----------
 
 function renderBlock(block) {
   switch (block.type) {
-    case "banner": return el("div", block.text, "banner");
     case "heading": return el(`h${Math.min(block.level + 1, 4)}`, block.text);
-    case "paragraph": return el("p", block.text);
+    case "paragraph": return el("p", block.text, block.style === "lead" ? "lead" : "");
+    case "summarybox": {  // the research note's first-page box
+      const box = el("div", null, "summarybox");
+      const left = el("div");
+      left.appendChild(el("div", "Key comparisons", "box-kicker"));
+      const list = el("ul", null, "plain-list");
+      for (const line of block.comparisons) list.appendChild(el("li", line));
+      left.appendChild(list);
+      const right = el("div", null, "summarybox-side");
+      right.appendChild(el("div", "Key data", "box-kicker"));
+      right.appendChild(keyDataBox(block.key_data));
+      right.appendChild(el("p", `Peers: ${block.peers}`, "source-line"));
+      box.append(left, right);
+      return box;
+    }
     case "statements": {
       const list = el("ul", null, "statements");
       if (!block.items.length) list.appendChild(el("li", "Nothing to show.", "empty"));
@@ -1207,17 +1236,15 @@ function renderReportTab() {
   toolbar.appendChild(link("Download Word", `/api/analyses/${id}/download/docx`, "btn"));
 
   const pages = el("div", null, "report-pages");
-  if (r.demo_label) pages.appendChild(el("div", r.demo_label, "print-label"));
   const cover = el("div", null, "report-page report-cover");
   const top = el("div");
   const logo = el("span", "folio", "logo");
   logo.appendChild(el("span", "."));
   top.appendChild(logo);
   top.appendChild(el("h1", `Financial analysis: ${r.company.name}`));
-  top.appendChild(el("p", `${r.company.ticker} · analysis date ${r.analysis_date} · ${r.mode} mode`));
-  if (r.demo_label) top.appendChild(el("p", r.demo_label, "cover-demo"));
+  top.appendChild(el("p", `${r.company.ticker} · analysis date ${r.analysis_date}`));
   cover.appendChild(top);
-  cover.appendChild(el("p", `Prepared by three agents: reports and indicators, earnings call and news, combined report · indicator definitions ${r.agent1.indicators.definition_version}`));
+  cover.appendChild(el("p", `Prepared by three agents: reports and indicators, earnings call, combined report · indicator definitions ${r.agent1.indicators.definition_version}`));
   pages.appendChild(cover);
 
   const body = el("div", null, "report-page report-body");
@@ -1225,7 +1252,6 @@ function renderReportTab() {
     if (block.type === "heading" && block.level === 1) continue;  // shown on the cover
     body.appendChild(renderBlock(block));
   }
-  if (r.demo_label) body.appendChild(el("div", r.demo_label, "banner"));
   pages.appendChild(body);
   $("tab-report").replaceChildren(toolbar, pages);
 }
@@ -1242,47 +1268,41 @@ function printReport() {
 
 // ---------- my reports ----------
 
-async function renderMyReports() {
+async function renderMyReports() {  // the analyses kept on the server, newest first
   const list = $("my-analyses");
+  list.replaceChildren(el("li", "Loading…", "empty"));
+  let analyses;
+  try {
+    analyses = await api("/api/analyses");
+  } catch (e) {
+    list.replaceChildren(el("li", e.message, "error"));
+    return;
+  }
   list.replaceChildren();
-  const analyses = recall("folio.analyses", []);
-  if (!analyses.length) list.appendChild(el("li", "No analyses yet. Analyses you run are remembered by this browser only.", "empty"));
+  if (!analyses.length) list.appendChild(el("li", "No analyses yet.", "empty"));
   for (const a of analyses) {
     const li = el("li");
     const info = el("div", null, "grow");
     info.appendChild(el("strong", `${a.name} (${a.ticker})`));
-    info.appendChild(el("div", `Analysis date ${a.as_of} · started ${String(a.created_at || "").slice(0, 16).replace("T", " ")}`, "hint"));
+    info.appendChild(el("div", `Analysis date ${a.analysis_date} · run ${String(a.created_at || "").slice(0, 16).replace("T", " ")}`, "hint"));
     li.appendChild(info);
-    li.appendChild(el("span", a.demo ? "Demo" : "Live", `pill ${a.demo ? "demo" : "live"}`));
     li.appendChild(button("Open", async () => {
       try {
         await openAnalysis(a.id);
         location.hash = "#dashboard";
       } catch (e) {
-        info.appendChild(el("div", e.status === 404 ? "This analysis is no longer stored on the server." : e.message, "error"));
+        info.appendChild(el("div", e.message, "error"));
       }
     }, "btn btn-small btn-navy"));
     li.appendChild(link("PDF", `/api/analyses/${a.id}/download/pdf`, "btn btn-small"));
     li.appendChild(link("Word", `/api/analyses/${a.id}/download/docx`, "btn btn-small"));
-    li.appendChild(button("Forget", () => {
-      remember("folio.analyses", recall("folio.analyses", []).filter((x) => x.id !== a.id));
+    li.appendChild(button("Delete", async () => {
+      if (!confirm(`Delete the analysis of ${a.name} (${a.analysis_date}) from this computer?`)) return;
+      await api(`/api/analyses/${a.id}`, { method: "DELETE" });
+      if (S.runningId === a.id) remember("folio.current", null);
       renderMyReports();
     }));
     list.appendChild(li);
-  }
-  const saved = await api("/api/reports").catch(() => []);
-  const reports = $("reports");
-  reports.replaceChildren();
-  if (!saved.length) reports.appendChild(el("li", "No saved reports yet. Saved reports are kept until you delete them.", "empty"));
-  for (const r of saved) {
-    const li = el("li", null);
-    li.appendChild(el("span", `${r.title} · ${r.created_at.slice(0, 10)} · ${r.citations} cited sources`, "grow"));
-    li.appendChild(button("Delete", async () => {
-      if (!confirm(`Delete the report "${r.title}" and its saved sources?`)) return;
-      await api(`/api/reports/${r.id}`, { method: "DELETE" });
-      renderMyReports();
-    }));
-    reports.appendChild(li);
   }
 }
 
@@ -1310,8 +1330,6 @@ async function loadServicesPage() {
   const problems = ["transcription", "ffmpeg"].filter((k) => byKey[k] && byKey[k].status !== "configured")
     .map((k) => `${byKey[k].label}: ${SERVICE_STATUS[byKey[k].status]}. ${serviceAdvice(byKey[k])}`);
   $("model-status").textContent = problems.length ? "Transcription cannot run yet. " + problems.join(" ") : "Transcription is configured.";
-  $("working").replaceChildren(...S.config.features.working.map((f) => el("li", f)));
-  $("awaiting").replaceChildren(...S.config.features.awaiting_implementation.map((f) => el("li", f)));
   renderJobs();
   await loadFiles();
 }
@@ -1423,11 +1441,11 @@ function renderJobs() {
 async function checkPrice(event) {
   event.preventDefault();
   const ticker = $("ticker").value.trim();
-  const date = $("price-date").value;
   $("price-result").textContent = "Checking…";
   try {
-    const q = await api(`/api/prices/${encodeURIComponent(ticker)}${date ? "?on=" + date : ""}`);
-    $("price-result").textContent = `${q.ticker} (${q.exchange}): ${q.close} ${q.currency} at the close on ${q.price_date}${q.stale ? " — STALE" : ""}. Source: ${q.source}. ${q.note}`;
+    const q = await api(`/api/prices/${encodeURIComponent(ticker)}`);
+    $("price-result").textContent = `${q.ticker} (${q.exchange}): ${q.close} ${q.currency}, closing price on ${q.price_date}`
+      + `${q.stale ? " (stale: the latest session has no close yet)" : ""}. Source: ${q.source}.`;
   } catch (e) {
     $("price-result").textContent = e.message;
   }

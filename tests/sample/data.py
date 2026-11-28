@@ -1,4 +1,4 @@
-# DEMO SAMPLE DATA: fictional companies, reports, prices, news, a call transcript and a recorded transcription. Nothing here is real or live.
+# Test sample data: fictional companies, reports, prices, a call transcript and a recorded transcription. Nothing here is real or live.
 # Reports are rendered as pages of text so later steps can practise extracting figures and citing document + page + section.
 import random
 from datetime import date, timedelta
@@ -8,7 +8,6 @@ from backend.market_calendar import calendar_for
 DEMO_LABEL = "DEMO – fictional sample data, not real"
 SOURCE_NAME = "DEMO sample documents (fictional)"
 MARKET_NAME = "DEMO market data (fictional)"
-NEWS_PUBLISHER = "Demo Wire (fictional)"
 LATEST_RESULTS_ANNOUNCEMENT = "2026-10-28"
 YEARS = [2021, 2022, 2023, 2024, 2025]
 STATUTORY_TAX_RATE = 21.0  # stated in each annual report's tax note; ROIC uses the home-country rate the report states
@@ -270,27 +269,6 @@ def price_bars(ticker: str, end: date) -> list[dict]:
             bars.append({"day": day, "close": round(price, 2), "volume": float(int(rng.uniform(0.002, 0.006) * c["shares"] * 1e6))})
         day += timedelta(days=1)
     return bars
-
-
-# ---------- news ----------
-
-_NEWS = [
-    ("2026-06-15", "{name} signs ten-year gas supply contract with a regional utility", "The contract covers a large share of the company's gas output."),
-    ("2026-10-30", "Regulator proposes stricter methane rules for oil and gas producers", "The proposed rule would tighten emissions limits across the sector."),
-    ("2026-11-03", "{name} reviews pipeline leak; company says it was contained", "Officials are reviewing an incident on a regional pipeline operated by the company."),
-    ("2026-11-05", "{name} chief executive tells conference that guidance is unchanged", "The chief executive said fourth-quarter guidance has not changed."),
-    ("2026-11-09", "New tariffs raise the cost of imported drilling equipment", "Tariffs on imported equipment could raise costs for producers."),
-    ("2026-11-10", "Local football club wins regional cup", "A sports result with no link to the company."),
-]
-
-
-def news_items(ticker: str) -> list[dict]:
-    if ticker != TARGET:
-        return []
-    name = COMPANIES[ticker]["name"]
-    return [{"id": f"demo-news-{i}", "publisher": NEWS_PUBLISHER, "published": d, "title": t.format(name=name), "summary": s,
-             "url": f"https://news.example.demo/{ticker.split('.')[0].lower()}/{i}", "demo": True}
-            for i, (d, t, s) in enumerate(_NEWS)]
 
 
 # ---------- recorded transcription of a fictional Turkish call ----------

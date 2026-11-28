@@ -219,6 +219,16 @@ class Edgar:
             except ValueError:
                 continue
 
+    def fiscal_quarter(self, ticker: str, report_date: str) -> str:
+        """The company's fiscal quarter of a report period end, as transcript providers name it: "2027Q1" for Microsoft's quarter to
+        30 September 2026 (its fiscal year ends in June)."""
+        month, dom = self._year_end(ticker)
+        day = _day(report_date)
+        fy = self._fiscal_year(day, month, dom)
+        start = self._fy_end(fy - 1, month, dom) + timedelta(days=1)
+        months = (day.year - start.year) * 12 + day.month - start.month + 1
+        return f"{fy}Q{min(4, max(1, (months + 2) // 3))}"
+
     def _label(self, start: str | None, end: str, month: int, dom: int) -> str | None:
         """FY2025 for a full fiscal year; YTD Q3 2026 for the year to date ending with the third quarter; None for other periods."""
         end_day = _day(end)

@@ -44,7 +44,6 @@ class CompanyInputs:
     ytd_prior: str | None = None
     price: Figure | None = None
     business_model: str = "operating"  # operating | bank | insurer
-    demo_label: str | None = None
     price_points: dict = field(default_factory=dict)  # "end", "1m", "3m", "12m" (split-adjusted) and "year end YYYY-12-31" closes
     price_note: str = ""  # why there is no price, for example "no market-data provider is configured"
     interest_rule: str = ""  # set for US GAAP filers: interest paid is classified within operating cash flow
@@ -966,6 +965,26 @@ def _historical(c: CompanyInputs, current: dict) -> dict:
     return out
 
 
+SUMMARY_ITEMS = [("revenue", lambda v: v.flow("revenue")), ("ebitda", lambda v: _ebitda(v)), ("ebit", lambda v: v.flow("ebit")),
+                 ("net_income_common", lambda v: v.flow("net_income_common")), ("cfo", lambda v: v.flow("cfo_reported")),
+                 ("capex", lambda v: v.flow("capex")), ("fcf", lambda v: _fcf(v))]
+
+
+def _figure_or_none(fn, view) -> dict | None:
+    try:
+        return fn(view).as_input()
+    except _Stop:
+        return None  # missing stays missing
+
+
+def _financial_summary(annual: list, current_view: _View, horizon: int) -> list[dict]:
+    """The banking-style financial summary: amounts by fiscal year in the horizon, plus the last twelve months, each with its sources."""
+    views = annual[-horizon:]
+    if current_view.label not in dict(views):
+        views = views + [(current_view.label, current_view)]
+    return [{"period": label, "items": {name: _figure_or_none(fn, view) for name, fn in SUMMARY_ITEMS}} for label, view in views]
+
+
 def analyse(c: CompanyInputs) -> dict:
     """Current-period indicators (TTM when interim reports exist), historical medians, and fiscal-year history for indicators that need
     no share price."""
@@ -985,14 +1004,16 @@ def analyse(c: CompanyInputs) -> dict:
         for name, reason in c.source_gaps.items():
             if r.status == "missing" and f"Missing input: {name}" in r.note and reason not in r.note:
                 r.note += " " + reason
-    notes = [c.demo_label] if c.demo_label else []
+    notes = []
     if c.business_model in FINANCIAL_MODELS:
         notes.append(f"Treated as a {c.business_model}: industrial cash-flow, EBITDA, debt and liquidity measures are not applicable (v1.0 section 8).")
     if not (c.ytd_current and c.ytd_prior):
         notes.append(f"No interim reports: current values use {c.latest_fy}.")
-    return {"company": c.name, "demo": bool(c.demo_label), "definition_version": DEFINITION_VERSION, "business_model": c.business_model,
+    return {"company": c.name, "definition_version": DEFINITION_VERSION, "business_model": c.business_model,
             "current_period": current_view.label, "horizon_years": c.horizon_years, "current": [current[s.id] for s in SPECS],
-            "history": history, "notes": notes}
+            "history": history, "notes": notes, "financial_summary": _financial_summary(annual, current_view, c.horizon_years),
+            "market": {"price": c.price.as_input() if c.price else None, "market_cap": _figure_or_none(_market_cap, current_view),
+                       "enterprise_value": _figure_or_none(_enterprise_value, current_view)}}
 
 
 def compare_with_peers(target: dict, peers: dict) -> list[dict]:

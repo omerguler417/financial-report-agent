@@ -28,11 +28,12 @@ SPECS = {
         "optional": ["MARKET_DATA_BASE_URL"],
         "how": "Choose a provider with an official API that permits automated access, create an API key, and set MARKET_DATA_PROVIDER and MARKET_DATA_API_KEY.",
     },
-    "news": {
-        "label": "News search",
-        "settings": [("NEWS_PROVIDER", "news_provider"), ("NEWS_API_KEY", "news_api_key")],
-        "optional": ["NEWS_BASE_URL"],
-        "how": "Choose a news provider during API setup, create an API key, and set NEWS_PROVIDER and NEWS_API_KEY.",
+    "call_transcripts": {
+        "label": "Earnings-call transcripts",
+        "settings": [("CALL_TRANSCRIPT_PROVIDER", "call_transcript_provider"), ("CALL_TRANSCRIPT_API_KEY", "call_transcript_api_key")],
+        "optional": ["CALL_TRANSCRIPT_BASE_URL"],
+        "how": "Create a free Alpha Vantage key at https://www.alphavantage.co/support/#api-key and set CALL_TRANSCRIPT_PROVIDER=alpha_vantage "
+               "and CALL_TRANSCRIPT_API_KEY in .env. Without it, upload a transcript in the New analysis form.",
     },
     "sec_edgar": {
         "label": "SEC EDGAR identification",
@@ -51,7 +52,10 @@ def _adapters(key: str) -> dict:
     if key == "market_data":
         from backend.fetchers import market_data
         return market_data.ADAPTERS
-    return {}  # news: no adapter until a provider is chosen
+    if key == "call_transcripts":
+        from backend.fetchers import call_transcripts
+        return call_transcripts.ADAPTERS
+    return {}
 
 
 def missing_for(settings: Settings, key: str) -> list[str]:

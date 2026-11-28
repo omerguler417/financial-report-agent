@@ -1,7 +1,8 @@
 # Runs one analysis in order: identify the company, select peers, Agent 1, Agent 2, Agent 3, save. Runs in the background with progress.
-# This is the one place that switches between demo and live services: the demo folder is loaded only when the user picks demo mode.
-# A live analysis needs the text model and SEC identification (it stops with HTTP 424 listing what is missing); share prices and news
-# are optional and, without a provider, are shown as not available. It never falls back to demo data.
+# Every analysis uses live services (SEC EDGAR, the text model, and the price and call-transcript providers when configured); the tests
+# pass their own stand-ins through AnalysisJobs(services=...).
+# A live analysis needs the text model and SEC identification (it stops with HTTP 424 listing what is missing); share prices and call
+# transcripts are optional and, without a provider, are shown as not available. It never falls back to other data.
 import json
 import os
 import re
@@ -12,10 +13,10 @@ from datetime import date, datetime, timezone
 
 from backend import llm
 from backend import services as service_registry
-from backend.agents import financial_analyst, meeting_news_analyst, report_combiner
+from backend.agents import call_analyst, financial_analyst, report_combiner
 from backend.config import Settings
 from backend.errors import ProviderNotConfigured, ServicesNotReady
-from backend.fetchers import edgar, filings, market_data
+from backend.fetchers import call_transcripts, edgar, filings, market_data
 from backend.fetchers.http_client import PoliteClient
 from backend.peer_selection import SOURCE_PROVIDER, SOURCE_USER, Candidate, Profile, merge_candidates, select_peers
 from backend.storage import Store
@@ -29,11 +30,6 @@ class AmbiguousCompany(Exception):
     def __init__(self, candidates: list[dict]):
         super().__init__("Several companies match; choose one by its ticker.")
         self.candidates = candidates
-
-
-def demo_services():
-    from backend.demo.demo_providers import demo_services as build  # loaded only for a demo analysis the user chose
-    return build()
 
 
 class LiveMarket:
@@ -66,8 +62,6 @@ class LiveServices:
     documents: object
     model: object
     figures: object
-    news: object = None  # no news provider yet: Agent 2 says so
-    label: str | None = None  # live data carries no demo label
 
 
 class EdgarDocuments:
@@ -75,8 +69,11 @@ class EdgarDocuments:
 
     name = edgar.NAME
 
-    def __init__(self, sec, store, settings, client, as_of: date, transcript: dict | None):
+    def __init__(self, sec, store, settings, client, as_of: date, transcript: dict | None, calls=None):
         self.sec, self.store, self.settings, self.client, self.as_of, self.transcript = sec, store, settings, client, as_of, transcript
+        self.calls = calls  # the earnings-call transcript provider, when configured
+        self.notes: list[str] = []
+        self._fetched: dict = {}
 
     def find(self, ticker: str) -> list[dict]:
         docs = []
@@ -88,11 +85,33 @@ class EdgarDocuments:
                          "publication_date": f["filed"], "url": f["url"], "path": str(self.store.current_path(meta)), "source_name": edgar.NAME,
                          "currency": "USD", "units": "as filed", "consolidation_scope": "consolidated", "accounting_framework": "US GAAP",
                          "restatement_status": "as filed"})
-        if self.transcript:
+        if self.transcript:  # the user's upload comes first: no provider request is made
             docs.append({"doc_id": self.transcript["id"], "kind": "transcript", "title": f"Uploaded by you: {self.transcript['filename']}",
                          "period": None, "publication_date": None, "url": None, "path": str(self.store.current_path(self.transcript)),
                          "source_name": "your upload", "origin": "user_upload"})
+        else:
+            docs += self._provider_call(ticker, docs)
         return docs
+
+    def _provider_call(self, ticker: str, reports: list[dict]) -> list[dict]:
+        """The call of the same fiscal quarter as the latest report, fetched once per analysis; otherwise a note says why there is none."""
+        if ticker in self._fetched:
+            return self._fetched[ticker]
+        self._fetched[ticker] = []
+        if self.calls is None:
+            self._note("Earnings-call transcripts are not fetched automatically: " + service_registry.SPECS["call_transcripts"]["how"])
+        elif reports:
+            latest = max(reports, key=lambda d: d["period"])
+            quarter = self.sec.fiscal_quarter(ticker, latest["period"])
+            try:
+                self._fetched[ticker] = [self.calls.fetch(ticker, quarter)]
+            except call_transcripts.CallTranscriptUnavailable as exc:
+                self._note(f"The earnings call for fiscal {quarter} could not be fetched from {self.calls.name}: {exc}")
+        return self._fetched[ticker]
+
+    def _note(self, text: str):
+        if text not in self.notes:
+            self.notes.append(text)
 
 
 def live_services(settings: Settings, store: Store, as_of: date, transcript_id: str | None = None, transport=None) -> LiveServices:
@@ -115,7 +134,9 @@ def live_services(settings: Settings, store: Store, as_of: date, transcript_id: 
     sec = edgar.Edgar(client, settings, as_of)
     transcript = store.get(transcript_id) if transcript_id else None
     prices = market_data.get_provider(settings, client) if service_registry.status(settings, "market_data") == service_registry.CONFIGURED else None
-    return LiveServices(market=LiveMarket(sec, prices), documents=EdgarDocuments(sec, store, settings, client, as_of, transcript),
+    calls = (call_transcripts.get_provider(settings, client)
+             if service_registry.status(settings, "call_transcripts") == service_registry.CONFIGURED else None)
+    return LiveServices(market=LiveMarket(sec, prices), documents=EdgarDocuments(sec, store, settings, client, as_of, transcript, calls),
                         model=llm.get_text_model(settings, transport=transport), figures=sec.figures)
 
 
@@ -171,13 +192,14 @@ def _write_whole(path, data: dict):
 
 
 class AnalysisJobs:
-    def __init__(self, store: Store, settings: Settings, transport=None):
+    def __init__(self, store: Store, settings: Settings, transport=None, services=None):
         self.store, self.settings, self.transport = store, settings, transport
+        self._services = services  # tests only: a function (as_of, transcript id) -> stand-in services; live services otherwise
         self._threads: dict[str, threading.Thread] = {}
 
-    def services_for(self, demo: bool, as_of: date | None = None, transcript: str | None = None):
-        if demo:
-            return demo_services()
+    def services_for(self, as_of: date | None = None, transcript: str | None = None):
+        if self._services is not None:
+            return self._services(as_of, transcript)
         return live_services(self.settings, self.store, as_of or date.today(), transcript, self.transport)
 
     def _path(self, job_id: str, suffix: str = "json"):
@@ -197,16 +219,37 @@ class AnalysisJobs:
             raise KeyError(job_id)
         return json.loads(path.read_text(encoding="utf-8"))
 
+    def saved(self) -> list[dict]:
+        """Finished analyses kept on the server, newest first: what "My reports" shows in any browser."""
+        out = []
+        for path in self.store.jobs_dir.glob("analysis_*.report.json"):
+            job_id = path.name.removeprefix("analysis_").removesuffix(".report.json")
+            try:
+                state = self.get(job_id)
+            except (KeyError, ValueError):
+                continue
+            out.append({"id": job_id, "ticker": state["company"]["ticker"], "name": state["company"]["name"],
+                        "analysis_date": state["as_of"], "created_at": state["created_at"]})
+        return sorted(out, key=lambda a: a["created_at"], reverse=True)
+
+    def delete(self, job_id: str):
+        """Removes an analysis and its report from the server."""
+        paths = [self._path(job_id), self._path(job_id, "report.json")]
+        if not paths[0].exists():
+            raise KeyError(job_id)
+        for path in paths:
+            path.unlink(missing_ok=True)
+
     def _save(self, state: dict):
         state["updated_at"] = _now()
         _write_whole(self._path(state["id"]), state)
 
-    def create(self, query: str, demo: bool, output_language: str, user_peers: list[str], as_of: date, chosen: list[str] | None = None,
-               transcript: str | None = None, horizon: int = 5) -> dict:
-        services = self.services_for(demo, as_of, transcript)  # a live analysis stops here if a required service is not ready
+    def create(self, query: str, output_language: str, user_peers: list[str], as_of: date, chosen: list[str] | None = None,
+               transcript: str | None = None, horizon: int = 5, questions: list[str] | None = None) -> dict:
+        services = self.services_for(as_of, transcript)  # stops here if a required service is not ready
         company = identify(query, services.market)
-        state = {"id": uuid.uuid4().hex[:12], "query": query, "company": company, "demo": demo, "output_language": output_language,
-                 "user_peers": user_peers, "as_of": as_of.isoformat(), "indicators": chosen, "horizon_years": horizon, "transcript_upload": transcript, "status": "queued", "error": None, "steps_done": ["identify"],
+        state = {"id": uuid.uuid4().hex[:12], "query": query, "company": company, "output_language": output_language,
+                 "user_peers": user_peers, "as_of": as_of.isoformat(), "indicators": chosen, "horizon_years": horizon, "questions": questions or [], "transcript_upload": transcript, "status": "queued", "error": None, "steps_done": ["identify"],
                  "current_step": "queued", "progress_percent": int(100 / len(STEPS)), "created_at": _now()}
         self._save(state)
         return state
@@ -235,7 +278,7 @@ class AnalysisJobs:
         state = self.get(job_id)
         try:
             as_of = date.fromisoformat(state["as_of"])
-            services = self.services_for(state["demo"], as_of, state.get("transcript_upload"))
+            services = self.services_for(as_of, state.get("transcript_upload"))
             company = state["company"]
             self._step(state, "peers")
             peers = choose_peers(company["ticker"], services, self.settings, state["user_peers"])
@@ -245,17 +288,13 @@ class AnalysisJobs:
             agent1 = financial_analyst.run(company, peers, services, as_of, context, state.get("indicators"), state.get("horizon_years", 5))
             self._step(state, "agent1", done=True)
             self._step(state, "agent2")
-            agent2 = meeting_news_analyst.run(company, services, as_of, context)
+            agent2 = call_analyst.run(company, services, as_of, context)
             self._step(state, "agent2", done=True)
             self._step(state, "agent3")
-            agent3 = report_combiner.run(company, agent1, agent2, services, context)
+            agent3 = report_combiner.run(company, agent1, agent2, services, context, state.get("questions", []))
             self._step(state, "agent3", done=True)
-            notes = []
-            if state["demo"] and state["output_language"] != "en":
-                notes.append("The demo's recorded answers are in English, so this demo report is in English.")
-            report = {"id": job_id, "mode": "demo" if state["demo"] else "live", "demo_label": getattr(services, "label", None),
-                      "company": company, "analysis_date": state["as_of"], "output_language": state["output_language"],
-                      "created_at": _now(), "peers": peers, "agent1": agent1, "agent2": agent2, "agent3": agent3, "notes": notes}
+            report = {"id": job_id, "company": company, "analysis_date": state["as_of"], "output_language": state["output_language"],
+                      "created_at": _now(), "peers": peers, "agent1": agent1, "agent2": agent2, "agent3": agent3}
             _write_whole(self._path(job_id, "report.json"), report)
             state["status"] = "completed"
             self._step(state, "save", done=True)

@@ -93,3 +93,15 @@ def test_a_registered_adapter_is_used_through_the_interface(tmp_path, monkeypatc
     settings = make_settings(tmp_path, market_data_provider="fake", market_data_api_key="k")
     q = get_closing_price("AAPL", settings, PoliteClient(settings), now=ny(2026, 11, 12, 17))
     assert q.price_date == "2026-11-12" and not q.stale
+
+
+def test_the_price_check_during_trading_gives_the_last_close_not_a_moving_price(tmp_path, monkeypatch):
+    class FakeAdapter(market_data.PriceProvider):
+        name = "fake prices"
+
+        def daily_series(self, ticker, start, end):  # today's bar exists but trading is still open
+            return series([date(2026, 11, 10), date(2026, 11, 11), date(2026, 11, 12)])
+    monkeypatch.setitem(market_data.ADAPTERS, "fake", FakeAdapter)
+    settings = make_settings(tmp_path, market_data_provider="fake", market_data_api_key="k")
+    q = get_closing_price("AAPL", settings, PoliteClient(settings), now=ny(2026, 11, 12, 14))  # 2 pm, market open
+    assert q.price_date == "2026-11-11" and q.reference_session == "2026-11-11" and not q.stale

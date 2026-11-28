@@ -25,7 +25,7 @@ class ReadResult:
 
 
 def pages_from_texts(texts: list[str]) -> list[Page]:
-    """Pages from a document already split into pages (for example the demo reports)."""
+    """Pages from a document already split into pages (for example a call transcript split by speaker turn)."""
     return [Page(i + 1, t, f"p. {i + 1}") for i, t in enumerate(texts)]
 
 

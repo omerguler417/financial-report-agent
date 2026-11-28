@@ -5,8 +5,8 @@ from datetime import date
 import pytest
 
 from backend import indicators as ind
-from backend.demo import demo_data as D
-from backend.demo.demo_providers import demo_company_inputs
+from tests.sample import data as D
+from tests.sample.providers import demo_company_inputs
 from backend.indicators import CompanyInputs, Figure
 
 M = "USD millions"
@@ -197,11 +197,11 @@ def test_peer_medians_use_only_meaningful_values_and_flag_small_groups():
 ON = date(2026, 11, 20)
 
 
-def test_demo_company_runs_end_to_end_with_every_number_sourced():
+def test_the_sample_company_runs_end_to_end_with_every_number_sourced():
     c = demo_company_inputs(D.TARGET, ON)
     analysis = ind.analyse(c)
     r = {x.indicator: x for x in analysis["current"]}
-    assert analysis["demo"] and D.DEMO_LABEL in analysis["notes"][0]
+    assert "demo" not in analysis
     assert all(x.status in ("calculated", "reported_only") for x in r.values()), {k: x.note for k, x in r.items() if x.status != "calculated"}
 
     f = D.financials(D.TARGET)
@@ -215,7 +215,7 @@ def test_demo_company_runs_end_to_end_with_every_number_sourced():
     docs = {d["doc_id"]: d for d in D.documents(D.TARGET)}
     for x in r.values():
         for i in x.inputs:
-            assert i["sources"] and all(s.get("demo") for s in i["sources"]), (x.indicator, i["name"])
+            assert i["sources"], (x.indicator, i["name"])  # every input names its source
             for s in i["sources"]:
                 if "doc_id" in s:  # the cited page really contains the cited line
                     assert s["line"] in docs[s["doc_id"]]["pages"][s["page"] - 1]

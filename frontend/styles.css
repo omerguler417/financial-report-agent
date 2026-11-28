@@ -67,10 +67,6 @@ p { margin: 0 0 0.6rem; }
 .breadcrumb { flex: 1; color: var(--muted); font-size: 0.85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .breadcrumb strong { color: var(--ink); }
 .menu-button { display: none; border: 1px solid var(--line); background: #fff; border-radius: 8px; padding: 0.3rem 0.6rem; font-size: 1.1rem; cursor: pointer; }
-.demo-banner {
-  position: sticky; top: 53px; z-index: 4; padding: 0.45rem 1.6rem; background: var(--red-soft); color: var(--red);
-  border-bottom: 1px solid #f5b5b5; font-weight: 700; text-align: center; font-size: 0.85rem;
-}
 .content { padding: 1.6rem; max-width: 1240px; width: 100%; }
 .page-head { margin-bottom: 1.1rem; }
 .page-head p { color: var(--muted); max-width: 52rem; }
@@ -96,7 +92,6 @@ p { margin: 0 0 0.6rem; }
 
 .field { display: block; border: 0; padding: 0; margin: 0 0 0.95rem; min-width: 0; }
 .label { display: block; font-size: 0.78rem; font-weight: 700; color: var(--ink); margin-bottom: 0.3rem; padding: 0; }
-.soon { margin-left: 0.4rem; padding: 0.05rem 0.45rem; border-radius: 99px; background: var(--amber-soft); color: var(--amber); font-style: normal; font-size: 0.68rem; font-weight: 700; }
 .optional { margin-left: 0.3rem; color: var(--muted); font-style: normal; font-weight: 500; }
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem; }
 input[type="text"], input[type="search"], input[type="date"], select, textarea {
@@ -119,12 +114,6 @@ input:disabled, select:disabled, textarea:disabled { background: #f1f3f6; color:
 }
 .drop-zone strong { color: var(--ink); }
 .drop-zone.over { border-color: var(--green); background: var(--green-soft); }
-.segmented { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem; padding: 0.25rem; background: #eef1f5; border-radius: 10px; }
-.segmented label { position: relative; cursor: pointer; }
-.segmented input { position: absolute; opacity: 0; }
-.segmented span { display: block; padding: 0.45rem; border-radius: 8px; text-align: center; font-weight: 600; color: var(--muted); }
-.segmented input:checked + span { background: #fff; color: var(--navy); box-shadow: var(--shadow); }
-.segmented input:focus-visible + span { outline: 2px solid var(--green); }
 .inline-form { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .inline-form input { width: auto; flex: 1 1 10rem; }
 .analysis-status { margin-top: 0.8rem; font-size: 0.85rem; }
@@ -137,7 +126,6 @@ progress { width: 100%; height: 0.5rem; }
 .pill.ok { background: var(--green-soft); color: #0f6f5a; }
 .pill.warn { background: var(--amber-soft); color: var(--amber); }
 .pill.bad { background: var(--red-soft); color: var(--red); }
-.pill.demo { background: var(--red-soft); color: var(--red); }
 .pill.live { background: var(--blue-soft); color: var(--blue); }
 .pill.agent-1 { background: var(--blue-soft); color: var(--blue); }
 .pill.agent-2 { background: var(--green-soft); color: #0f6f5a; }
@@ -194,7 +182,7 @@ progress { width: 100%; height: 0.5rem; }
 .tabs button { border: 0; background: none; padding: 0.6rem 0.9rem; font: inherit; font-weight: 600; color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; white-space: nowrap; }
 .tabs button.active { color: var(--navy); border-bottom-color: var(--green); }
 .card-head { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; margin-bottom: 0.6rem; }
-.card-head h2 { margin: 0; }
+.card-head h2 { margin: 0; font-family: Georgia, "Times New Roman", serif; color: #0b2545; font-size: 1.12rem; }
 
 .statements { list-style: none; padding: 0; margin: 0; }
 .statements > li { padding: 0.6rem 0.75rem; margin: 0 0 0.5rem; border-radius: 9px; background: #fafbfd; border: 1px solid var(--line); }
@@ -208,9 +196,6 @@ progress { width: 100%; height: 0.5rem; }
 .quote.unverified { background: var(--amber-soft); }
 .quote p { margin: 0.15rem 0 0; }
 .quote-who { font-size: 0.78rem; font-weight: 700; color: var(--muted); }
-.news-item { padding: 0.7rem 0; border-bottom: 1px solid var(--line); }
-.news-item:last-child { border-bottom: 0; }
-.news-meta { font-size: 0.75rem; color: var(--muted); }
 .position { padding: 0.5rem 0.7rem; margin: 0 0 0.45rem; border-radius: 9px; background: #fafbfd; border: 1px solid var(--line); }
 .position.unverified { background: var(--amber-soft); }
 .plain-list { margin: 0; padding-left: 1.1rem; }
@@ -240,12 +225,41 @@ tr:hover td { background: #fafbfd; }
 .report-cover { background: var(--navy); color: #d5deea; min-height: 22rem; display: flex; flex-direction: column; justify-content: space-between; }
 .report-cover .logo { font-size: 1.4rem; }
 .report-cover h1 { color: #fff; font-size: 1.8rem; margin-top: 2rem; }
-.report-cover .cover-demo { color: #ffb4b4; font-weight: 700; }
 .report-body h2 { margin-top: 1.4rem; padding-bottom: 0.3rem; border-bottom: 2px solid var(--green-soft); }
 .report-body h3 { margin-top: 1rem; }
-.report-body .banner { padding: 0.45rem; margin-bottom: 1rem; border: 1px solid #f5b5b5; border-radius: 6px; background: var(--red-soft); color: var(--red); font-weight: 700; text-align: center; }
 .report-body .sources { font-size: 0.75rem; color: var(--muted); }
-.print-label { display: none; }
+/* ---------- the research-note opening: masthead, first-page box ---------- */
+.page-head.masthead { background: #0b2545; color: #d5deea; padding: 1.3rem 1.5rem; border-radius: var(--radius); margin-bottom: 1rem; }
+.page-head.masthead .eyebrow { color: #9fb3c8; text-transform: uppercase; letter-spacing: 0.08em; }
+.page-head.masthead h1 { color: #fff; font-family: Georgia, "Times New Roman", serif; font-size: 1.9rem; margin: 0.2rem 0; }
+.page-head.masthead p { color: #c3cfdc; margin: 0; }
+.overview-top { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 1rem; align-items: start; }
+.overview-top .card { margin-bottom: 1rem; }
+.overview-top .key-data { width: 100%; box-sizing: border-box; }
+.overview-side { display: flex; flex-direction: column; min-width: 0; }
+.peers-list dt { color: var(--navy); font-weight: 700; }
+.peers-list dd { text-align: left; font-weight: 400; color: var(--muted); }
+.summarybox { display: grid; grid-template-columns: 3fr 2fr; gap: 1.2rem; border-top: 2px solid #0b2545; padding: 0.8rem 0; margin: 0.6rem 0 1.2rem; }
+.summarybox-side { background: #f2f4f7; padding: 0.6rem 0.8rem; }
+.summarybox .key-data { width: 100%; background: transparent; border-top: 0; margin: 0.3rem 0; }
+.box-kicker { font-size: 0.7rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-bottom: 0.3rem; }
+
+/* ---------- exhibits and key data: the look of a bank's company report ---------- */
+.exhibit { margin: 0.9rem 0 1.1rem; }
+.exhibit-title { font-size: 0.78rem; font-weight: 700; color: #0b2545; margin-bottom: 0.3rem; }
+table.exhibit-table th { background: #0b2545; color: #fff; text-transform: none; letter-spacing: 0; font-size: 0.72rem; border: 0; padding: 0.4rem 0.5rem; }
+table.exhibit-table td { padding: 0.32rem 0.5rem; border-bottom: 1px solid #e3e8ee; font-size: 0.8rem; }
+table.exhibit-table td.num { text-align: right; }
+table.exhibit-table td.muted { text-align: left; }
+table.exhibit-table tr.median-row td { background: #f2f4f7; border-top: 1.5px solid #0b2545; font-weight: 600; }
+.exhibit-source { font-size: 0.7rem; font-style: italic; color: var(--muted); margin: 0.25rem 0 0; }
+.key-data { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0; margin: 0.6rem 0 1rem; border-top: 2px solid #0b2545; background: #f2f4f7; max-width: 100%; }
+.key-data dt, .key-data dd { margin: 0; padding: 0.3rem 0.9rem; border-bottom: 1px solid #e3e8ee; font-size: 0.82rem; }
+.key-data dt { color: var(--muted); }
+.key-data dd { font-weight: 700; text-align: right; color: var(--navy); }
+.report-body p.lead { font-weight: 700; margin-top: 0.4rem; }
+.report-body h2 { font-family: Georgia, "Times New Roman", serif; color: #0b2545; border-bottom: 1.5px solid #0b2545; }
+.report-body h3, .report-body h4 { color: #0b2545; }
 
 /* ---------- sources ---------- */
 .toolbar { display: flex; flex-wrap: wrap; gap: 0.7rem; align-items: center; margin-bottom: 0.9rem; }
@@ -274,8 +288,6 @@ tr:hover td { background: #fafbfd; }
 .service { padding: 0.8rem 0.9rem; border: 1px solid var(--line); border-radius: 10px; background: #fafbfd; font-size: 0.82rem; }
 .service strong { display: block; margin-bottom: 0.3rem; }
 .service p { margin: 0.3rem 0 0; color: var(--muted); }
-.status-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; font-size: 0.85rem; }
-.status-grid ul { padding-left: 1.1rem; }
 .error { color: var(--red); }
 .warn { color: var(--amber); }
 
@@ -291,6 +303,9 @@ tr:hover td { background: #fafbfd; }
 /* ---------- responsive ---------- */
 .scrim { display: none; }
 /* ---------- reading text: statements without boxes ---------- */
+.source-line { font-size: 0.8rem; color: var(--muted); margin-bottom: 0.4rem; }
+.qa-pair { padding: 0.3rem 0 0.3rem 0.8rem; margin: 0.4rem 0 0.8rem; border-left: 2px solid #0b2545; }
+.qa-pair .prose-item { border-bottom: 0; padding: 0.25rem 0; }
 .prose-item { padding: 0.6rem 0; border-bottom: 1px solid #eef1f4; }
 .prose-item:last-child { border-bottom: 0; }
 .prose-item p { margin: 0; font-size: 0.92rem; line-height: 1.65; }
@@ -351,7 +366,7 @@ details.sources-box li { margin-bottom: 0.2rem; }
   .menu-button { display: inline-block; }
   .topbar { padding: 0.6rem 1rem; }
   .content { padding: 1rem; }
-  .field-row, .flow-pair, .status-grid, .transcript-cols { grid-template-columns: 1fr; }
+  .field-row, .flow-pair, .transcript-cols, .overview-top, .summarybox { grid-template-columns: 1fr; }
   .transcript-cols > div:nth-child(odd) { border-right: 0; }
   .metrics { grid-template-columns: 1fr 1fr; }
   .report-page { padding: 1.3rem; }
@@ -361,14 +376,13 @@ details.sources-box li { margin-bottom: 0.2rem; }
 @media print {
   @page { margin: 18mm 14mm; }
   body { background: #fff; font-size: 11px; }
-  .sidebar, .topbar, .demo-banner, .page-head, .metrics, .tabs, .report-toolbar, .modal, .scrim { display: none !important; }
+  .sidebar, .topbar, .page-head, .metrics, .tabs, .report-toolbar, .modal, .scrim { display: none !important; }
   .page, .tab-panel { display: none !important; }
   #page-dashboard, #tab-report { display: block !important; }
   .content { padding: 0; max-width: none; }
   .report-pages { gap: 0; }
   .report-page { border: 0; box-shadow: none; border-radius: 0; padding: 0; }
   .report-cover { min-height: 92vh; padding: 2.5rem; break-after: page; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  .print-label { display: block; position: fixed; top: -12mm; left: 0; right: 0; text-align: center; color: var(--red); font-weight: 700; font-size: 9px; }
   .cite { background: none; padding: 0; color: #0f6f5a; }
   a { color: inherit; text-decoration: none; }
 }

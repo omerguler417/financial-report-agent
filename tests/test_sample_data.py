@@ -1,5 +1,5 @@
-# Demo mode, step 1: fictional sample data and demo stand-ins. Everything is labelled as demo, figures sit on the pages they claim,
-# the sample accounts add up, and demo data is never used as a fallback when a live service is unconfigured.
+# The fictional sample company the tests use (tests/sample): everything in it is labelled as fictional, figures sit on the pages they
+# claim, the sample accounts add up, and the app never imports it, so it can never act as a fallback for a missing key.
 import io
 import re
 from datetime import date, datetime
@@ -9,8 +9,8 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from backend import llm
-from backend.demo import demo_data as D
-from backend.demo.demo_providers import demo_services
+from tests.sample import data as D
+from tests.sample.providers import demo_services
 from backend.errors import ProviderNotConfigured
 from backend.fetchers import market_data
 from backend.fetchers.http_client import PoliteClient
@@ -32,13 +32,11 @@ def test_every_demo_company_is_obviously_fictional():
         assert ticker.endswith(".DEMO") and "(demo)" in c["name"]
 
 
-def test_every_document_news_item_and_price_series_is_labelled():
+def test_every_document_and_price_series_is_labelled():
     services = demo_services()
     for ticker in D.COMPANIES:
         for doc in services.documents.find(ticker):
             assert doc["demo"] and D.DEMO_LABEL in doc["pages"][0]
-    for item in services.news.search("Northgate", D.TARGET):
-        assert item["demo"] and "fictional" in item["publisher"].lower()
     series = services.market.daily_series(D.TARGET, date(2026, 1, 1), date(2026, 11, 20))
     assert "DEMO" in series.source
 
@@ -84,7 +82,7 @@ def test_target_has_five_years_and_comparable_quarters():
     assert set(f["ytd"]) == {"YTD Q3 2026", "YTD Q3 2025"}
 
 
-# ---------- prices, news, transcript, recording ----------
+# ---------- prices, transcript, recording ----------
 
 def test_prices_fall_only_on_trading_days_and_are_fresh():
     series = demo_services().market.daily_series(D.TARGET, date(2025, 1, 1), date(2026, 11, 20))
@@ -92,14 +90,6 @@ def test_prices_fall_only_on_trading_days_and_are_fresh():
     assert series.bars and all(cal.is_trading_day(b.day) and b.close > 0 and b.volume > 0 for b in series.bars)
     q = select_quote(series, datetime(2026, 11, 20, 17, tzinfo=NY))
     assert q.price_date == "2026-11-20" and not q.stale
-
-
-def test_news_has_recent_and_older_material_items():
-    items = demo_services().news.search("Northgate", D.TARGET)
-    announced = D.LATEST_RESULTS_ANNOUNCEMENT
-    assert any(i["published"] > announced for i in items) and any(i["published"] < announced for i in items)
-    assert all(i["url"].startswith("https://news.example.demo/") and i["published"] and i["title"] for i in items)
-    assert demo_services().news.search("Ridgeway", "RDGE.DEMO") == []
 
 
 def test_transcript_separates_management_and_analysts():
@@ -129,7 +119,7 @@ def test_demo_recording_runs_through_the_existing_transcription_job(tmp_path):
     assert result["source_language"] == "tr" and result["segments"][0]["translation"]
 
 
-# ---------- demo is never a fallback ----------
+# ---------- the sample is never a fallback ----------
 
 def test_unconfigured_live_services_still_give_setup_messages(tmp_path):
     settings = make_settings(tmp_path)
@@ -141,7 +131,8 @@ def test_unconfigured_live_services_still_give_setup_messages(tmp_path):
         market_data.get_provider(settings, PoliteClient(settings))
 
 
-def test_live_code_never_imports_demo_code():
-    for rel in ("llm.py", "services.py", "config.py", "main.py", "fetchers/market_data.py", "fetchers/http_client.py"):
-        source = (BACKEND / rel).read_text(encoding="utf-8")
-        assert "demo" not in re.findall(r"^\s*(?:from|import)\s+[\w.]+", source, re.M).__str__(), rel
+def test_the_app_never_imports_the_test_sample_or_has_a_demo_mode():
+    for path in BACKEND.rglob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        imports = " ".join(re.findall(r"^\s*(?:from|import)\s+[\w.]+", source, re.M))
+        assert "tests" not in imports and "demo" not in source.lower(), path.name

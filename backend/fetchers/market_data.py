@@ -146,9 +146,8 @@ def get_provider(settings: Settings, client: PoliteClient) -> PriceProvider:
     return ADAPTERS[settings.market_data_provider](settings, client)
 
 
-def get_closing_price(ticker: str, settings: Settings, client: PoliteClient, on_date: date | None = None,
-                      now: datetime | None = None) -> PriceQuote:
+def get_closing_price(ticker: str, settings: Settings, client: PoliteClient, now: datetime | None = None) -> PriceQuote:
+    """The latest completed session's close: during trading hours, the previous session's close."""
     now = now or datetime.now(timezone.utc)
-    target = on_date or now.date()
-    series = get_provider(settings, client).daily_series(ticker, target - timedelta(days=14), target)
-    return select_quote(series, now, on_date, settings.extra_market_closures)
+    series = get_provider(settings, client).daily_series(ticker, now.date() - timedelta(days=14), now.date())
+    return select_quote(series, now, None, settings.extra_market_closures)

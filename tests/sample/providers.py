@@ -1,13 +1,13 @@
-# DEMO stand-ins for each external service. They read only the fictional data in demo_data.py, label everything as demo, and are used
-# only when the user picks demo mode for a whole analysis. Live code never imports them, so they can never act as a fallback for a missing key.
-# Market data, news, documents, speech-to-text, translation, and recorded text-model answers for the analysis tasks (demo_answers.py).
+# Test stand-ins for each external service, reading only the fictional sample company in data.py: market data, documents, speech-to-text,
+# translation, and recorded text-model answers for the analysis tasks (answers.py). Used only by the tests, through the analysis runner's
+# test hook (create_app(..., analysis_services=...)); the app never imports them.
 from dataclasses import dataclass
 from datetime import date, datetime
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
-from backend.demo import demo_answers
-from backend.demo import demo_data as D
+from tests.sample import answers as demo_answers
+from tests.sample import data as D
 from backend.fetchers.market_data import DailyBar, PriceSeries
 from backend.indicators import CompanyInputs
 
@@ -37,13 +37,6 @@ class DemoMarketData:
         bars = [DailyBar(b["day"], b["close"], b["close"], datetime(b["day"].year, b["day"].month, b["day"].day, 16, tzinfo=NY), b["volume"])
                 for b in D.price_bars(ticker, end) if b["day"] >= start]
         return PriceSeries(ticker, "NYSE", "USD", "America/New_York", D.MARKET_NAME, bars)
-
-
-class DemoNews:
-    name, demo = "DEMO news (fictional)", True
-
-    def search(self, company: str, ticker: str, since: str | None = None) -> list[dict]:
-        return [i for i in D.news_items(ticker) if since is None or i["published"] >= since]
 
 
 class DemoDocuments:
@@ -83,18 +76,16 @@ def demo_ffmpeg(duration: float = 19.0):
 def demo_company_inputs(ticker: str, on: date) -> CompanyInputs:
     """Indicator inputs for a demo company, produced by Agent 1's own path: recorded extraction, checks, then inputs."""
     from backend.agents.financial_analyst import company_inputs
-    return company_inputs({"ticker": ticker, "name": D.COMPANIES[ticker]["name"]}, demo_services(), on, D.DEMO_LABEL)[0]
+    return company_inputs({"ticker": ticker, "name": D.COMPANIES[ticker]["name"]}, demo_services(), on)[0]
 
 
 @dataclass
 class DemoServices:
     market: DemoMarketData
-    news: DemoNews
     documents: DemoDocuments
     model: DemoModel
     ffmpeg_run: object
-    label: str = D.DEMO_LABEL
 
 
 def demo_services() -> DemoServices:
-    return DemoServices(DemoMarketData(), DemoNews(), DemoDocuments(), DemoModel(), demo_ffmpeg())
+    return DemoServices(DemoMarketData(), DemoDocuments(), DemoModel(), demo_ffmpeg())

@@ -37,19 +37,3 @@ def test_temporary_files_are_deleted_after_retention(tmp_path):
         os.utime(p, (eight_days_ago, eight_days_ago))
     assert store.cleanup_temp(7) == ["job_old"]
     assert not old.exists() and recent.exists()
-
-
-def test_saved_report_keeps_its_source_versions_until_deleted(tmp_path):
-    store = Store(make_settings(tmp_path).storage_dir)
-    meta = store.save_retrieved(b"v1 text", "https://ir.example.com/a.txt", "a.txt", "text/plain")
-    store.save_retrieved(b"v2 text", "https://ir.example.com/a.txt", "a.txt", "text/plain")
-    report = store.save_report("Test report", {"summary": "x"}, [{"doc_id": meta["id"], "version": 1, "location": "p. 3"}])
-    assert report["citations"][0]["version"] == 1 and report["citations"][0]["location"] == "p. 3"
-
-    store.delete_document(meta["id"])  # the report still has its own copy of the cited version
-    copy = store.reports_dir / report["id"] / report["citations"][0]["copy"]
-    assert copy.read_bytes() == b"v1 text"
-
-    assert store.list_reports()[0]["id"] == report["id"]
-    store.delete_report(report["id"])
-    assert store.list_reports() == []

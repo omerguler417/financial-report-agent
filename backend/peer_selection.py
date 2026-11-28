@@ -195,17 +195,20 @@ def select_peers(target: Profile, candidates: list[Candidate], settings: Setting
     else:
         chosen = pool[:places]
 
-    for cand, a in chosen:
+    def entry(cand, a):
         limited = a.get("limited")
-        peers.append({"ticker": cand.profile.ticker, "name": cand.profile.name,
-                      "label": "selected (matched on SEC industry code and size only)" if limited else "selected", "sources": cand.sources,
-                      "criteria": a["criteria"], "missing_information": a["missing_information"],
-                      "explanation": _explain(cand, a) + (" " + LIMITED_NOTE if limited else "")})
+        return {"ticker": cand.profile.ticker, "name": cand.profile.name,
+                "label": "selected (matched on SEC industry code and size only)" if limited else "selected", "sources": cand.sources,
+                "criteria": a["criteria"], "missing_information": a["missing_information"],
+                "explanation": _explain(cand, a) + (" " + LIMITED_NOTE if limited else "")}
+
+    peers += [entry(cand, a) for cand, a in chosen]
+    reserve = [entry(cand, a) for cand, a in pool if (cand, a) not in chosen]  # next-closest suitable companies, in order
 
     minimum = min(settings.min_peers, total)
     if len(peers) < minimum:
         notes.append(f"Only {len(peers)} suitable peer(s) found; no unsuitable companies were added to reach {minimum}.")
     if not peers:
         notes.append("No suitable peers: the company is compared with its own history only.")
-    return {"target": target.ticker, "method": METHOD, "index_filter": index_filter, "peers": peers,
+    return {"target": target.ticker, "method": METHOD, "index_filter": index_filter, "peers": peers, "reserve": reserve,
             "excluded": excluded, "notes": notes}

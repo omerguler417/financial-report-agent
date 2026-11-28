@@ -1,6 +1,6 @@
 # Live analyses from SEC EDGAR: finding the company, turning the SEC's XBRL figures into report figures (fiscal years ending in June,
 # restatements, filings after the analysis date left out), the SEC identification header, the text model's "ask" step, and a full
-# live run with fake SEC and fake OpenAI replies (no network, no cost). Prices and news have no provider and must say so.
+# live run with fake SEC and fake OpenAI replies (no network, no cost). Without a price provider, prices must say so.
 import json
 
 import httpx2
@@ -213,7 +213,7 @@ def live_client(tmp_path, answers):
     return TestClient(app), fake
 
 
-def test_a_live_analysis_runs_from_edgar_without_prices_or_news(tmp_path):
+def test_a_live_analysis_runs_from_edgar_without_prices(tmp_path):
     answers = {
         "summarise_reports": {"statements": [{"text": "Management says revenue grew with cloud services.",
                                               "citations": [{"doc_id": K25[0], "page": 2}]}]},
@@ -228,7 +228,7 @@ def test_a_live_analysis_runs_from_edgar_without_prices_or_news(tmp_path):
     state = client.post("/api/analyses", json={"company": "EXMP", "as_of": "2026-05-15", "transcript_upload": upload["id"]}).json()
     assert state["status"] == "completed", state.get("error")
     report = client.get(f"/api/analyses/{state['id']}/report").json()
-    assert report["mode"] == "live" and report["demo_label"] is None
+    assert "mode" not in report and "demo_label" not in report
 
     current = {r["indicator"]: r for r in report["agent1"]["indicators"]["current"]}
     assert current["net_margin"]["status"] == "calculated" and current["roic"]["status"] == "calculated"
@@ -238,7 +238,7 @@ def test_a_live_analysis_runs_from_edgar_without_prices_or_news(tmp_path):
     assert any("no market-data provider" in n for n in report["agent1"]["notes"])
     assert report["agent1"]["summary"][0]["verified"]
     assert report["agent2"]["call"]["statements"][0]["verified"]
-    assert any("no news provider" in n for n in report["agent2"]["notes"]) and report["agent2"]["news"]["included"] == []
+    assert "news" not in report["agent2"]
     assert report["agent3"]["risks"][0]["verified"]
     assert not any("demo" in json.dumps(r["inputs"]).lower() for r in current.values())  # never demo data
     assert any(str(r.url).endswith("/chat/completions") for r in fake.requests)
@@ -250,7 +250,7 @@ def test_a_live_analysis_still_lists_what_it_cannot_run_without(tmp_path):
     assert response.status_code == 424
     needed = " | ".join(item["service"] for item in response.json()["needs_configuration"])
     assert "Text model" in needed and "SEC EDGAR" in needed
-    assert "Market data" not in needed and "News" not in needed  # optional now: shown as not available in the report
+    assert "Market data" not in needed  # optional: shown as not available in the report
 
 
 def test_d_and_a_is_built_from_depreciation_and_amortisation_when_no_total_is_reported(tmp_path):

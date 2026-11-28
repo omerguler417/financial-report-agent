@@ -98,13 +98,13 @@ def test_flagged_wording_makes_a_statement_unverified():
     assert not s["verified"] and "valuation verdict" in s["issues"][0]
 
 
-def test_extra_fields_are_kept_and_news_sources_show_publisher_and_date():
-    read = {"n1": {"doc": {"doc_id": "n1", "kind": "news", "title": "Regulator proposes rules", "url": "https://news.example/1",
-                           "publisher": "Example Wire", "published": "2026-10-30"},
-                   "pages": rr.pages_from_texts(["Regulator proposes rules\nThe rule would tighten limits."])}}
-    [s] = V.check_statements([{"text": "A regulator proposed tighter limits.", "speaker": "News", "citations": [{"doc_id": "n1", "page": 1}]}], read, [])
-    assert s["verified"] and s["speaker"] == "News"
-    assert s["citations"][0]["publisher"] == "Example Wire" and s["citations"][0]["published"] == "2026-10-30"
+def test_extra_fields_such_as_the_speaker_are_kept():
+    read = {"c1": {"doc": {"doc_id": "c1", "kind": "transcript", "title": "Q3 earnings call", "url": None},
+                   "pages": rr.pages_from_texts(["Jane Doe (CFO): The rule would tighten limits."])}}
+    [s] = V.check_statements([{"text": "The CFO said the rule would tighten limits.", "speaker": "Jane Doe", "kind": "management",
+                               "citations": [{"doc_id": "c1", "page": 1}]}], read, [])
+    assert s["verified"] and s["speaker"] == "Jane Doe" and s["kind"] == "management"
+    assert s["citations"][0]["title"] == "Q3 earnings call"
 
 
 def test_document_references_in_the_text_are_removed_not_mistaken_for_figures():

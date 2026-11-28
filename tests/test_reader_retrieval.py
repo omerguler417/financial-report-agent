@@ -1,8 +1,8 @@
 # Step 2: reading documents into numbered pages (PDF, Word, Excel, HTML, text) and finding the pages relevant to a question.
 from backend import report_reader as rr
 from backend import retrieval
-from backend.demo import demo_data as D
-from backend.demo.demo_providers import demo_services
+from tests.sample import data as D
+from tests.sample.providers import demo_services
 
 
 def make_pdf(path, pages: list[str]):

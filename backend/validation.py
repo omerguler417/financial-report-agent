@@ -1,6 +1,6 @@
 # Checks on everything a text model returns before it is used. A figure must sit on the page it cites, with the same value; a statement
 # must cite a real source, every number in it must appear in that source or in the cited Python result, and it must not give a
-# valuation verdict or claim that news moved the share price. Figures that fail are rejected with the reason; statements that fail
+# valuation verdict or claim about what moved the share price. Figures that fail are rejected with the reason; statements that fail
 # are kept but labelled unverified, never silently dropped.
 import re
 
@@ -14,12 +14,12 @@ PRICE_MOVE = re.compile(r"\b(?:shares?|stock|share price)\b[^.]{0,40}?\b(?:fell|
 
 
 def wording_issues(text: str) -> list[str]:
-    """CLAUDE.md: no valuation verdicts or recommendations, and no claim that news moved the share price."""
+    """CLAUDE.md: no valuation verdicts or recommendations, and no claim about what moved the share price."""
     issues = []
     if m := VERDICT.search(text):
         issues.append(f"Wording: '{m.group(0)}' is a valuation verdict or recommendation, which the report must not give.")
     if PRICE_MOVE.search(text):
-        issues.append("Wording: links news to a share-price move; overlapping timing is not evidence of cause.")
+        issues.append("Wording: claims a cause for a share-price move; overlapping timing is not evidence of cause.")
     return issues
 
 
@@ -47,12 +47,11 @@ def _source(read: dict, doc_id: str, page: int, line: str | None = None) -> dict
     if line is not None:
         source["line"] = line
     source["url"] = doc.get("url")
-    for key in ("publisher", "published"):  # news: publisher + date + link
-        if doc.get(key):
-            source[key] = doc[key]
+    if doc.get("page_unit"):  # a call transcript's sections are speaker turns, not pages
+        source["page_unit"] = doc["page_unit"]
     if doc.get("publication_date"):  # reports: when it was published, for "what was known on a date"
         source["published"] = doc["publication_date"]
-    return {**source, "demo": True} if doc.get("demo") else source
+    return source
 
 
 def _page_text(read: dict, doc_id, page) -> tuple[str | None, str | None]:
@@ -158,8 +157,7 @@ def _find_result(citation: dict, results: list[dict], current_period: str | None
 
 
 def _blank(c) -> bool:
-    return isinstance(c, dict) and not str(c.get("doc_id") or "").strip() and not str(c.get("indicator") or "").strip() \
-        and not str(c.get("news_id") or "").strip()
+    return isinstance(c, dict) and not str(c.get("doc_id") or "").strip() and not str(c.get("indicator") or "").strip()
 
 
 def check_statements(statements: list[dict], read: dict, results: list[dict], current_period: str | None = None) -> list[dict]:
