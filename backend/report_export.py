@@ -161,12 +161,15 @@ def _pdf_flowables(view: dict, st: dict, width: float) -> list:
 
 
 def _keep_headings_with_text(flowables: list) -> list:
-    """A section heading, its rule and the first thing under it go on the same page."""
+    """A section heading, its rule and the first thing under it go on the same page. An exhibit that is already kept together is
+    unpacked into the group: a KeepTogether inside a KeepTogether always reports itself too tall, which started every section on a
+    new page."""
     out, i = [], 0
     while i < len(flowables):
         f = flowables[i]
         if isinstance(f, Paragraph) and f.style.name == "h2" and i + 2 < len(flowables) and isinstance(flowables[i + 1], HRFlowable):
-            out.append(KeepTogether(flowables[i:i + 3]))
+            first = flowables[i + 2]
+            out.append(KeepTogether(flowables[i:i + 2] + (list(first._content) if isinstance(first, KeepTogether) else [first])))
             i += 3
         else:
             out.append(f)

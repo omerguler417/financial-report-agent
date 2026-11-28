@@ -111,3 +111,15 @@ def test_both_files_give_footnote_numbers_and_each_sections_sources_not_a_source
     for text in (pdf, body):
         assert "Source: Annual report" not in text and "Calculated: P/E" not in text  # no source line under each point
         assert "Annual report FY2025 (demo), p. 6" in text and "sources in Appendix C" in text  # the sections' source lists
+
+
+def test_short_sections_share_a_page_and_no_heading_is_left_at_the_bottom(demo):
+    # 28 November 2026: each section started a new page (Financial summary and Trading comparables each alone on half-empty pages)
+    _, _, view = demo
+    pages = [(page.extract_text() or "").splitlines() for page in PdfReader(io.BytesIO(report_export.to_pdf(view))).pages]
+    heads = [b["text"] for b in view["blocks"] if b["type"] == "heading" and b["level"] == 2]
+    on = {h: next(i for i, lines in enumerate(pages) if any(h in line for line in lines)) for h in heads}
+    assert on["3. Trading comparables"] == on["4. Historical valuation"]  # both fit on one page; before, each started its own
+    for lines in pages:
+        body = [line for line in lines if line.strip() and not line.startswith(("Financial analysis:", "For educational", "Page "))]
+        assert body and not any(body[-1].strip() == h for h in heads), body[-1:]  # a section heading never ends a page
