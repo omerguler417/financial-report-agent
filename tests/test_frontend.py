@@ -249,3 +249,8 @@ def test_the_overview_shows_only_disagreements_with_two_positions():
     script = (FRONTEND / "app.js").read_text(encoding="utf-8")
     card = script[script.index("function disagreementsCard"):]
     assert "d.positions.length >= 2" in card[:500]
+
+
+def test_peers_left_out_are_not_mentioned_on_the_website():
+    script = (FRONTEND / "app.js").read_text(encoding="utf-8")
+    assert "Not used: " not in script and "left out ·" not in script

@@ -289,7 +289,7 @@ function stepDetail(key) {
   const r = S.report;
   if (!r) return "";
   const a1 = r.agent1, a2 = r.agent2, a3 = r.agent3;
-  if (key === "sources") return `${r.peers.peers.length} peers chosen, ${r.peers.excluded.length} left out · ${a1.documents.length} company reports · ${a2.call.documents.length} call transcript(s)`;
+  if (key === "sources") return `${r.peers.peers.length} peers chosen · ${a1.documents.length} company reports · ${a2.call.documents.length} call transcript(s)`;
   if (key === "agent1") return `${a1.documents.length} reports read · ${a1.extraction_check.accepted} figures checked and used · ${a1.extraction_check.rejected.length} rejected · ${a1.summary.length} summary statements`;
   if (key === "agent2") return `${a2.call.statements.length} call statements`;
   return `${a3.statement_check.checked} statements checked across the agents · ${a3.statement_check.unverified} unverified`;
@@ -996,7 +996,7 @@ function peersCard(r) {
   }
   if (!r.peers.peers.length) chips.appendChild(el("p", "No suitable peers: the company is compared with its own history only.", "empty"));
   box.appendChild(chips);
-  if (r.peers.peers.length || r.peers.excluded.length) {
+  if (r.peers.peers.length) {
     const why = el("details", null, "more");
     why.appendChild(el("summary", "Why these peers"));
     const list = el("ul", null, "plain-list");
@@ -1007,7 +1007,6 @@ function peersCard(r) {
       li.appendChild(el("div", p.explanation, "hint"));
       list.appendChild(li);
     }
-    for (const e of r.peers.excluded) list.appendChild(el("li", `Not used: ${e.ticker}. ${e.reason}`, "hint"));
     why.appendChild(list);
     box.appendChild(why);
   }

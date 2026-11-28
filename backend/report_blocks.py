@@ -36,6 +36,57 @@ def model_name(result: dict) -> str:
     return f"Peers' median: {name.removesuffix(' peer median')}" if result.get("period") == "peer median" else name
 
 
+NUMBER_WORDS = {2: "Both", 3: "All three", 4: "All four", 5: "All five", 6: "All six", 7: "All seven", 8: "All eight"}
+
+
+LEGAL = re.compile(r",?\s+(?:inc|corp|corporation|co|company|ltd|plc|holdings)\.?$", re.I)
+
+
+def _peer_name(p: dict) -> str:
+    """"ORACLE CORP" -> "Oracle (ORCL)": the SEC name without its legal form, in normal capitals, with the ticker."""
+    name = LEGAL.sub("", p.get("name") or p.get("ticker", "")).strip()
+    if name.isupper():
+        name = " ".join(w if len(w) <= 3 else w.capitalize() for w in name.split())
+    return f"{name} ({p['ticker']})" if p.get("ticker") else name
+
+
+def _join(names: list[str]) -> str:
+    return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
+
+
+def _basis(label: str, many: bool) -> str:
+    """Why a group of peers was chosen, as a clause after "were" / "was"."""
+    if label.startswith("user-requested"):
+        return "chosen by you" + (", with limited comparability" if "limited" in label else "")
+    if "industry code and size" in label:
+        return (f"chosen because {'they share' if many else 'it shares'} the company's SEC industry code and "
+                f"{'are' if many else 'is'} closest to it in size")
+    return f"chosen as the closest comparable {'companies' if many else 'company'} by industry, business and size"
+
+
+def _basis_short(label: str) -> str:
+    """The same, as a short tag after a list of names ("…, chosen by you")."""
+    if label.startswith("user-requested"):
+        return "chosen by you" + (", with limited comparability" if "limited" in label else "")
+    if "industry code and size" in label:
+        return "chosen for sharing the company's SEC industry code and being closest to it in size"
+    return "chosen as the closest comparables by industry, business and size"
+
+
+def peers_sentence(peers: list[dict]) -> str:
+    """"Peers: A, B and C. All three were chosen because …": the peers once, and how they were chosen said once."""
+    groups: dict = {}
+    for p in peers:
+        groups.setdefault(_basis_short(p.get("label", "")), []).append(p)
+    if len(groups) == 1:
+        members = peers
+        many = len(members) > 1
+        lead = (NUMBER_WORDS.get(len(members), f"All {len(members)}") + " were") if many else "It was"
+        return f"Peers: {_join([_peer_name(p) for p in members])}. {lead} {_basis(members[0].get('label', ''), many)}."
+    parts = [f"{_join([_peer_name(p) for p in members])}, {basis}" for basis, members in groups.items()]
+    return "Peers: " + (", and ".join(parts) if len(parts) == 2 else "; ".join(parts)) + "."
+
+
 def _link(url):
     return url if isinstance(url, str) and url.startswith(("http://", "https://")) else None
 
@@ -263,9 +314,7 @@ def build(report: dict) -> dict:
     table(f"Trading comparables ({ex['comparables']['period']})", ex["comparables"],
           f"Source: Company filings, {price_source}Verity.")
     if peers["peers"]:
-        blocks.append({"type": "paragraph", "text": "Peers: " + "; ".join(f"{p['name']} ({p['label']})" for p in peers["peers"]) + "."})
-    for e in peers.get("excluded", []):
-        blocks.append({"type": "paragraph", "text": f"Not used as a peer: {e['ticker']}. {e['reason']}"})
+        blocks.append({"type": "paragraph", "text": peers_sentence(peers["peers"])})
 
     section("Historical valuation")
     if ex["historical"]["rows"]:

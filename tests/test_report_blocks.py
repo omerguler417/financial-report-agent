@@ -229,3 +229,27 @@ def test_a_saved_single_position_disagreement_is_not_shown(demo):
     blocks = report_blocks.build(old)["blocks"]
     assert "None" not in [b.get("text") for b in blocks if b["type"] == "heading"]
     assert "No disagreements were identified." in [b.get("text") for b in blocks]
+
+
+def test_peers_left_out_are_not_mentioned_in_the_report(demo):
+    # agreed 28 November 2026: the report names the peers used, never the ones skipped or replaced
+    _, _, report = demo
+    shown = copy.deepcopy(report)
+    shown["peers"]["excluded"] = [{"ticker": "XYZ", "reason": "Skipped: no share count in the available data."}]
+    text = " ".join(str(b) for b in report_blocks.build(shown)["blocks"])
+    assert "Not used as a peer" not in text and "XYZ" not in text
+
+
+def test_the_peers_are_listed_once_with_one_sentence_on_how_they_were_chosen():
+    # 28 November 2026: "ORACLE CORP (selected (matched on SEC industry code and size only)); ..." repeated the same basis for each peer
+    limited = "selected (matched on SEC industry code and size only)"
+    peers = [{"ticker": t, "name": n, "label": limited} for t, n in (("ORCL", "ORACLE CORP"), ("CRM", "Salesforce, Inc."), ("ADBE", "ADOBE INC."))]
+    assert report_blocks.peers_sentence(peers) == ("Peers: Oracle (ORCL), Salesforce (CRM) and Adobe (ADBE). All three were chosen "
+                                                   "because they share the company's SEC industry code and are closest to it in size.")
+    mixed = peers[:2] + [{"ticker": "HPQ", "name": "HP INC", "label": "user-requested"}]
+    text = report_blocks.peers_sentence(mixed)
+    assert text == ("Peers: Oracle (ORCL) and Salesforce (CRM), chosen for sharing the company's SEC industry code and being closest "
+                    "to it in size, and HP (HPQ), chosen by you.")
+    assert "matched on SEC industry code and size only" not in text
+    assert report_blocks.peers_sentence([{"ticker": "DELL", "name": "Dell Technologies Inc.", "label": limited}]).startswith(
+        "Peers: Dell Technologies (DELL). It was chosen because it shares")
