@@ -134,3 +134,34 @@ def test_the_own_history_cell_is_short_enough_for_a_table():
     years = {fy: [result("bvps", "Book value per share", v, "USD per share", fy)] for fy, v in (("FY2021", 18.88), ("FY2026", 59.56))}
     out = comparisons.build(report([result("bvps", "Book value per share", 63.35, "USD per share")], [], years))
     assert out["cells"]["bvps"]["own_history"] == "18.88 → 59.56 (FY2021–FY2026)"
+
+
+# Valuation summary (approved 28 November 2026): Python decides, for the peers and for the company's own history separately, whether
+# most valuation multiples are more than 15% above the benchmark (expensive), more than 15% below (cheap), or neither (fairly priced).
+def test_the_valuation_summary_labels_the_multiples_against_peers_and_own_history():
+    current = [result("pe", "P/E", 30.0, "x"), result("ev_ebitda", "EV/EBITDA", 26.0, "x"), result("ev_sales", "EV/sales", 10.0, "x"),
+               result("pb", "P/B", 9.0, "x"), result("p_fcf", "P/FCF", -5.0, "x"),  # a negative multiple is not compared
+               result("pe_vs_hist", "P/E against its historical median", -0.20, "fraction"),
+               result("ev_ebitda_vs_hist", "EV/EBITDA against its historical median", -0.10, "fraction"),
+               result("pb_vs_hist", "P/B against its historical median", 0.05, "fraction"),
+               result("ev_sales_vs_hist", "EV/sales against its historical median", 0.0, "fraction", status="missing")]
+    comparison = [row("pe", 20.0, 4, list("ABCD")), row("ev_ebitda", 20.0, 4, list("ABCD")), row("ev_sales", 9.0, 4, list("ABCD")),
+                  row("pb", 6.0, 4, list("ABCD")), row("p_fcf", 30.0, 4, list("ABCD"))]
+    out = comparisons.build(report(current, comparison))["valuation"]
+    peers, history = out["parts"]
+    assert out["band"] == 0.15
+    assert peers["benchmark"] == "peers" and peers["label"] == "expensive"  # P/E +50%, EV/EBITDA +30%, P/B +50%; EV/sales +11.1% within
+    assert [(r["name"], r["difference"], r["position"]) for r in peers["rows"]] == [
+        ("P/E", "+50.0%", "above"), ("EV/EBITDA", "+30.0%", "above"), ("EV/sales", "+11.1%", "within"), ("P/B", "+50.0%", "above")]
+    assert peers["text"].startswith("3 of its 4 valuation multiples are more than 15% above the peer median (P/E +50.0%")
+    assert history["benchmark"] == "own history" and history["label"] == "fairly priced"  # −20% below, −10% and +5% within
+    assert [r["position"] for r in history["rows"]] == ["below", "within", "within"]
+    assert "relative to its peers" in out["overall"] and "against its own 5-year history" in out["overall"]
+    for text in [peers["text"], history["text"], out["overall"]]:
+        assert V.wording_issues(text) == [], text  # benchmarked, and no recommendation
+    assert {"indicator": "pe", "period": "peer median"} in peers["cites"]
+    cheap = comparisons.build(report([result("pe", "P/E", 10.0, "x"), result("pb", "P/B", 2.0, "x")],
+                                     [row("pe", 20.0, 3, list("ABC")), row("pb", 4.0, 3, list("ABC"))]))["valuation"]
+    assert [p["label"] for p in cheap["parts"]] == ["cheap"] and cheap["parts"][0]["text"].startswith("Both valuation multiples are")
+    none = comparisons.build(report([result("pe", "P/E", 10.0, "x")], [row("pe", 20.0, 3, list("ABC"))]))["valuation"]
+    assert none["parts"] == [] and "Not enough" in none["overall"]  # one multiple is not enough to sum up

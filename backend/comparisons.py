@@ -1,6 +1,7 @@
 # Plain-language comparison lines for the dashboard and the report, written by Python from the calculated results (never by the text
 # model): the company against the peer median, against its own history, against each peer's own history, and its trend over the
-# horizon. Wording describes differences only ("above", "below", "higher", "lower"); it never judges value or recommends anything.
+# horizon. Lines describe differences ("above", "below", "higher", "lower"); only the valuation summary calls the shares expensive,
+# cheap or fairly priced, always against a named benchmark, and nothing here recommends anything.
 # Every line cites the calculated results it was built from. Works on saved reports, so older analyses get the lines too.
 from backend.report_blocks import display
 
@@ -200,8 +201,66 @@ def _cells(current: dict, comparison: dict, history: dict) -> dict:
     return cells
 
 
+VALUATION_MULTIPLES = ["pe", "ev_ebitda", "ev_sales", "pb", "p_fcf"]  # the multiples the valuation summary weighs
+BAND = 0.15  # within ±15% of the benchmark counts as in line (decided 28 November 2026)
+LABEL_WORDS = {"expensive": "expensive", "cheap": "cheap", "fairly priced": "broadly fairly priced"}
+
+
+def _position(difference: float) -> str:
+    return "above" if difference > BAND else "below" if difference < -BAND else "within"
+
+
+def _valuation_part(benchmark: str, phrase: str, against: str, rows: list[dict], cites: list[dict]) -> dict | None:
+    """One benchmark's verdict: expensive if most multiples are more than 15% above it, cheap if most are more than 15% below."""
+    n = len(rows)
+    if n < 2:
+        return None
+    counts = {k: sum(r["position"] == k for r in rows) for k in ("above", "below", "within")}
+    label = "expensive" if counts["above"] > n / 2 else "cheap" if counts["below"] > n / 2 else "fairly priced"
+    if label == "fairly priced":
+        text = (f"Of its {n} valuation multiples, {counts['above']} {'is' if counts['above'] == 1 else 'are'} more than 15% above {against}, "
+                f"{counts['below']} more than 15% below and {counts['within']} within 15%")
+    else:
+        side = "above" if label == "expensive" else "below"
+        listed = ", ".join(f"{r['name']} {r['difference']}" for r in rows if r["position"] == side)
+        count = ("Both" if n == 2 else f"All {n}") if counts[side] == n else f"{counts[side]} of its {n}"
+        text = f"{count} valuation multiples are more than 15% {side} {against} ({listed})"
+    text += f"; on this measure the company looks {LABEL_WORDS[label]} {phrase}."
+    return {"benchmark": benchmark, "label": label, "phrase": phrase, "text": text, "rows": rows, "cites": cites}
+
+
+def valuation_summary(current: dict, comparison: dict, horizon: int) -> dict:
+    """The end-of-report summary of the valuation comparisons, decided in Python. It sums up the comparisons and recommends nothing."""
+    peer_rows, peer_cites, hist_rows, hist_cites = [], [], [], []
+    for ind in VALUATION_MULTIPLES:
+        r, row = current.get(ind), comparison.get(ind, {})
+        median = row.get("peer_median")
+        if r and r["status"] in USABLE and (r.get("value") or 0) > 0 and (median or 0) > 0:
+            d = r["value"] / median - 1
+            peer_rows.append({"indicator": ind, "name": r["name"], "value": display(r["value"], r["unit"]),
+                              "benchmark": display(median, r["unit"]), "difference": f"{d * 100:+,.1f}%", "position": _position(d)})
+            peer_cites += [_cite(r), _peer_cite(row)]
+        against, med = current.get(f"{ind}_vs_hist"), current.get(f"{ind}_hist_median")
+        if against and against["status"] == "calculated" and against.get("value") is not None:
+            d = against["value"]
+            hist_rows.append({"indicator": ind, "name": HIST_BASES.get(ind, ind), "value": display(r["value"], r["unit"]) if r else "—",
+                              "benchmark": display(med["value"], "x") if med and med.get("value") is not None else "—",
+                              "difference": f"{d * 100:+,.1f}%", "position": _position(d)})
+            hist_cites += [_cite(against)] + ([_cite(med)] if med else [])
+    parts = [p for p in (_valuation_part("peers", "relative to its peers", "the peer median", peer_rows, peer_cites),
+                         _valuation_part("own history", f"against its own {horizon}-year history", "its own historical median",
+                                         hist_rows, hist_cites)) if p]
+    if not parts:
+        overall = "Not enough valuation multiples could be compared with the peers or with the company's own history to sum up its valuation."
+    else:
+        overall = "Taken together, the company looks " + " and ".join(f"{LABEL_WORDS[p['label']]} {p['phrase']}" for p in parts) + "."
+    return {"band": BAND, "parts": parts, "overall": overall,
+            "note": "This sums up the comparisons in this report. It is not investment advice."}
+
+
 def build(report: dict) -> dict:
-    """{"groups": [{"group", "lines"}], "by_indicator": {id: [lines]}, "cells": {id: display values}, "peers": [tickers]};
+    """{"groups": [{"group", "lines"}], "by_indicator": {id: [lines]}, "cells": {id: display values}, "peers": [tickers],
+    "valuation": the valuation summary};
     each line is {"text", "kind", "cites"}."""
     indicators = report["agent1"]["indicators"]
     horizon = indicators.get("horizon_years", 5)
@@ -238,4 +297,5 @@ def build(report: dict) -> dict:
         if lines:
             groups.append({"group": spec_group, "lines": lines})
     peers = [p["ticker"] for p in report.get("peers", {}).get("peers", [])]
-    return {"groups": groups, "by_indicator": by_indicator, "cells": _cells(current, comparison, history), "peers": peers}
+    return {"groups": groups, "by_indicator": by_indicator, "cells": _cells(current, comparison, history), "peers": peers,
+            "valuation": valuation_summary(current, comparison, horizon)}

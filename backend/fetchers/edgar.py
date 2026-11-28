@@ -51,7 +51,8 @@ TAGS = {
     "current_assets": (BALANCE, ["AssetsCurrent"]),
     "current_liabilities": (BALANCE, ["LiabilitiesCurrent"]),
     "cash_eligible": (BALANCE, ["CashAndCashEquivalentsAtCarryingValue"]),
-    "short_term_investments": (BALANCE, ["ShortTermInvestments", "AvailableForSaleSecuritiesDebtSecuritiesCurrent"]),
+    "short_term_investments": (BALANCE, ["ShortTermInvestments", "AvailableForSaleSecuritiesDebtSecuritiesCurrent",
+                                         "MarketableSecuritiesCurrent"]),  # the last: Apple's
     "trade_receivables": (BALANCE, ["AccountsReceivableNetCurrent"]),
     "inventories": (BALANCE, ["InventoryNet"]),
     "trade_payables": (BALANCE, ["AccountsPayableCurrent"]),
@@ -76,6 +77,13 @@ COMPOSITES = {
                                   "No combined D&A figure is reported, so D&A is depreciation plus amortisation of intangible assets; "
                                   "finance-lease amortisation is not added, to avoid double counting.", True),
 }
+# decided 28 November 2026 (Coca-Cola): debt tagged only together with finance ("capital") leases, used for a period without the usual
+# debt figure; the finance-lease liability is subtracted when it is tagged, so the leases are counted once, in lease_liabilities
+DEBT_WITH_FINANCE_LEASES = [("required", [["LongTermDebtAndCapitalLeaseObligations", "LongTermDebtAndCapitalLeaseObligationsCurrent"],
+                                          ["LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities"],
+                                          ["LongTermDebtAndCapitalLeaseObligations"]]),
+                            ("optional", [["NotesAndLoansPayable"], ["CommercialPaper"], ["ShortTermBorrowings"]])]  # one of them: no overlap
+FINANCE_LEASES = [["FinanceLeaseLiability"], ["FinanceLeaseLiabilityNoncurrent", "FinanceLeaseLiabilityCurrent"]]
 # v1.0 inputs the SEC's company facts do not contain, with the reason shown when the indicator cannot be calculated
 SOURCE_GAPS = {"free_float_shares": "The SEC's data has no free-float share count; it would need a market-data source that provides one."}
 COVER_SHARES = "EntityCommonStockSharesOutstanding"
@@ -226,8 +234,8 @@ class Edgar:
         day = _day(report_date)
         fy = self._fiscal_year(day, month, dom)
         start = self._fy_end(fy - 1, month, dom) + timedelta(days=1)
-        months = (day.year - start.year) * 12 + day.month - start.month + 1
-        return f"{fy}Q{min(4, max(1, (months + 2) // 3))}"
+        months = (day - start).days / 30.44  # elapsed time, not calendar months: 52/53-week quarters end a few days into a month
+        return f"{fy}Q{min(4, max(1, round(months / 3)))}"
 
     def _label(self, start: str | None, end: str, month: int, dom: int) -> str | None:
         """FY2025 for a full fiscal year; YTD Q3 2026 for the year to date ending with the third quarter; None for other periods."""
@@ -289,7 +297,8 @@ class Edgar:
             s = self._source(r, tag, statement, index, namespace)
             if s not in sources:
                 sources.append(s)
-        return {"field": field, "period": label, "value": latest["val"] * factor, "unit": name, "sources": sources, "note": note}
+        return {"field": field, "period": label, "value": latest["val"] * factor, "unit": name, "sources": sources, "note": note,
+                "end": latest["end"]}  # the period's last day: fiscal year-ends for the historical medians
 
     def figures(self, ticker: str, as_of: date, years: int = YEARS_KEPT) -> tuple[list[dict], list[str]]:
         """Report figures from the SEC's XBRL data, by fiscal period, as filed by `as_of`, for the latest `years` fiscal years (the
@@ -309,6 +318,7 @@ class Edgar:
                         put(self._figure(field, label, rows, tag, statement, index))
         for field, (statement, parts, note, only_missing) in COMPOSITES.items():
             self._composite(field, statement, parts, note, only_missing, facts, as_of, month, dom, index, put, found)
+        self._debt_with_finance_leases(facts, as_of, month, dom, index, found, put)
         self._cover_page_shares(facts, as_of, found, put)
         self._group_figures(facts, as_of, month, dom, index, found, put)
         notes = ["Report figures come from the SEC's XBRL data (company facts); each cites its filing, statement and SEC tag."]
@@ -463,6 +473,27 @@ class Edgar:
             tags = " + ".join(t for tags, _ in used for t in tags)
             put({"field": field, "period": label, "value": value, "unit": "USD millions", "sources": sources,
                  "note": f"Sum of SEC figures {tags}, converted to USD millions. {note}"})
+
+    def _debt_with_finance_leases(self, facts, as_of, month, dom, index, found, put):
+        """Debt for periods without the usual debt tags, from tags that include finance leases (Coca-Cola's way)."""
+        combined: dict = {}
+        self._composite("debt_ex_leases", BALANCE, DEBT_WITH_FINANCE_LEASES, "", True, facts, as_of, month, dom, index,
+                        lambda fig: combined.__setitem__(fig["period"], fig), found)
+        leases: dict = {}
+        self._composite("finance_leases", BALANCE, [("required", FINANCE_LEASES)], "", False, facts, as_of, month, dom, index,
+                        lambda fig: leases.__setitem__(fig["period"], fig), {})
+        for label, fig in combined.items():
+            tags = fig["note"].split("Sum of SEC figures ", 1)[1].split(",", 1)[0]
+            lease = leases.get(label)
+            if lease:
+                lease_tags = lease["note"].split("Sum of SEC figures ", 1)[1].split(",", 1)[0]
+                fig = {**fig, "value": fig["value"] - lease["value"], "sources": fig["sources"] + [x for x in lease["sources"] if x not in fig["sources"]],
+                       "note": f"SEC figures {tags}, which include finance leases, minus {lease_tags}, converted to USD millions; the "
+                               "finance leases are counted once, with the other lease liabilities."}
+            else:
+                fig = {**fig, "note": f"Sum of SEC figures {tags}, converted to USD millions. This includes finance-lease obligations, "
+                                      "which the filing does not tag separately, so they are not added again as lease liabilities."}
+            put(fig)
 
     def _group_figures(self, facts, as_of, month, dom, index, found, put):
         """Group net income, NCI and total equity, which filers without non-controlling interests often do not tag separately."""

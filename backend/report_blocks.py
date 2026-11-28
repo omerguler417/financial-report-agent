@@ -2,11 +2,13 @@
 # The website draws these now; the PDF and Word files (step 5b) will draw the same blocks, so all three show the same content.
 # Numbers are only formatted for display here; nothing is calculated.
 
+import re
+
 SECTIONS = ["Executive summary", "Your questions", "Financial summary", "Trading comparables", "Historical valuation", "Financial analysis",
-            "Business overview and outlook", "Earnings call highlights", "Where the sources disagree", "Key risks"]
+            "Business overview and outlook", "Earnings call highlights", "Where the sources disagree", "Key risks", "Valuation summary"]
 TOPICS = [("business", "Business"), ("results", "Results"), ("outlook", "Outlook")]
 SUMMARY_GROUPS = ["Valuation", "Profitability", "Debt and liquidity", "Cash flow and dividends", "Growth"]
-REPORT_SOURCE = "Source: company reports and filings; folio. calculations."
+REPORT_SOURCE = "Source: Company filings, Verity."
 KIND_LABELS = {"management": "Management", "guidance": "Guidance", "analyst": "Analyst question or assumption"}
 DISCOUNT_NOTE = ("Peer discount = 1 − company ÷ peer median: negative means the company's multiple is above the peer median, positive "
                  "means below. pp = percentage points. These describe differences only; they are not valuation verdicts.")
@@ -31,15 +33,34 @@ def _link(url):
     return url if isinstance(url, str) and url.startswith(("http://", "https://")) else None
 
 
+MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
+FILING = re.compile(r"^(10-K|10-Q|20-F|40-F|6-K|8-K)\b.*?period ended (\d{4})-(\d{2})-\d{2}")
+CALL = re.compile(r"^Earnings call transcript, \S+ fiscal (\d{4}) (Q[1-4])")
+
+
+def _short_title(title: str) -> str:
+    """A document's short name for footnotes: "10-Q, quarter ended Sep 2026", "Q1 FY2027 earnings call"; the full title is in
+    Appendix C."""
+    if m := FILING.match(title or ""):
+        form, year, month = m.groups()
+        kind = "quarter ended" if form == "10-Q" else "fiscal year ended" if form in ("10-K", "20-F", "40-F") else "period ended"
+        return f"{form}, {kind} {MONTHS[int(month) - 1]} {year}"
+    if m := CALL.match(title or ""):
+        return f"{m.group(2)} FY{m.group(1)} earnings call"
+    return title
+
+
 def _cite(c: dict) -> dict:
     if "indicator" in c:
-        return {"text": f"Calculated: {c.get('name') or c['indicator']} ({c.get('period')})", "url": None}
+        return {"text": f"Calculated: {c.get('name') or c['indicator']} ({c.get('period')})", "url": None,
+                "calc": [c.get("name") or c["indicator"], c.get("period")]}
     if c.get("publisher"):
         return {"text": f"{c['publisher']}, {c.get('published', '')}".rstrip(", "), "url": _link(c.get("url"))}
     if c.get("page") is None and c.get("section"):
         return {"text": f"{c.get('title') or c.get('doc_id')}, {c['section']} ({c.get('tag', '')})", "url": _link(c.get("url"))}
     unit = "turn" if c.get("page_unit") == "turn" else "p."
-    return {"text": f"{c.get('title') or c.get('doc_id')}, {unit} {c.get('page')}", "url": _link(c.get("url"))}
+    title = c.get("title") or c.get("doc_id")
+    return {"text": f"{title}, {unit} {c.get('page')}", "note": f"{_short_title(title)}, {unit} {c.get('page')}", "url": _link(c.get("url"))}
 
 
 def _statement(s: dict, tag: str | None = None) -> dict:
@@ -75,6 +96,54 @@ def _comparison(row: dict | None) -> str:
     return f"{row['comparison'] * 100:+,.2f} pp"
 
 
+def _footnotes(blocks: list[dict]) -> list[dict]:
+    """Research-note citations: each point and commentary paragraph gets footnote numbers, and each section ends with one short list
+    of its sources, numbered from 1. A source cited by several points gets one number; the calculated results a section cites share
+    one note naming each indicator by period, pointing to the appendices for their inputs and sources."""
+    out: list[dict] = []
+    numbers: dict = {}
+    notes: list[dict] = []
+    calculated: dict = {}
+
+    def flush():
+        if not notes:
+            return
+        for note in notes:
+            if note.get("calc"):
+                periods = [p for p in calculated if p != "peer median"] + (["peer medians"] if "peer median" in calculated else [])
+                note["text"] = (f"Company filings and market prices, {', '.join(periods)}; "
+                                "calculations in Appendix A, sources in Appendix C.")
+                note.pop("calc")
+        out.append({"type": "footnotes", "items": notes[:]})
+        numbers.clear(), notes.clear(), calculated.clear()
+
+    def number(source: dict) -> int:
+        if source.get("calc"):
+            name, period = source["calc"]
+            names = calculated.setdefault(period, [])
+            if name not in names:
+                names.append(name)
+            key = "calc"
+        else:
+            key = (source["text"], source.get("url"))
+        if key not in numbers:
+            numbers[key] = len(notes) + 1
+            notes.append({"number": numbers[key], "text": source.get("note") or source["text"], "url": source.get("url"), "calc": key == "calc"})
+        return numbers[key]
+
+    for b in blocks:
+        if b["type"] == "heading" and b["level"] == 2:
+            flush()
+        if b["type"] == "statements":
+            for item in b["items"]:
+                item["notes"] = sorted({number(src) for src in item["sources"]})
+        elif b["type"] == "commentary":
+            b["notes"] = sorted({number(src) for src in b["sources"]})
+        out.append(b)
+    flush()
+    return out
+
+
 def _verified_first(statements: list[dict]) -> list[dict]:
     """Verified statements first; unverified ones stay in the report, labelled, after them."""
     return sorted(statements, key=lambda s: not s.get("verified", s.get("label") == "verified"))
@@ -90,6 +159,45 @@ def _commentary(lines: list[dict]) -> list[dict]:
     return out
 
 
+def _written(commentary: dict | None, lines: list[dict]) -> list[dict]:
+    """A section's commentary as written by Agent 3 (headline and paragraph, verified sentences only; unverified ones are listed in
+    Appendix D), or, when there is none, the Python comparison lines."""
+    if commentary:
+        headline = commentary.get("headline")
+        sentences = [s for s in commentary.get("paragraph", []) if s.get("verified")]
+        if sentences:
+            return [_commentary_block(sentences, headline["text"] if headline and headline.get("verified") else None)]
+    return _commentary(lines)
+
+
+def _commentary_block(sentences: list[dict], headline: str | None = None) -> dict:
+    sources = []
+    for s in sentences:
+        sources += [c for c in (_cite(x) for x in s.get("citations", [])) if c not in sources]
+    return {"type": "commentary", "headline": headline, "text": " ".join(s["text"] for s in sentences), "sources": sources}
+
+
+def _valuation_section(valuation: dict, written: list[dict]) -> list[dict]:
+    """The end-of-report summary: Python decides each label (±15% band), Agent 3 explains it, and the note says what it is not."""
+    out = [{"type": "paragraph", "style": "lead", "text": valuation["overall"]}]
+    if valuation["parts"]:
+        rows = {}
+        for part in valuation["parts"]:
+            for r in part["rows"]:
+                row = rows.setdefault(r["name"], {"current": r["value"]})
+                row[part["benchmark"]] = (r["benchmark"], r["difference"])
+        out.append({"type": "table", "columns": ["Multiple", "Current", "Peer median", "Against peers", "Own median", "Against own history"],
+                    "rows": [[name, row["current"], *row.get("peers", ("—", "—")), *row.get("own history", ("—", "—"))]
+                             for name, row in rows.items()],
+                    "notes": [f"Within ±{valuation['band'] * 100:.0f}% of the benchmark counts as in line. Negative multiples are not compared."]})
+        out += [{"type": "paragraph", "text": part["text"]} for part in valuation["parts"]]
+    verified = [s for s in written if s.get("verified")]
+    if verified:
+        out.append(_commentary_block(verified))
+    out.append({"type": "paragraph", "style": "note", "text": valuation["note"]})
+    return out
+
+
 def build(report: dict) -> dict:
     """The report in the order of a bank's company report: summary and key data, numbered exhibits, analysis, commentary, risks, and
     appendices. It describes and compares; it gives no rating, target or recommendation."""
@@ -98,6 +206,7 @@ def build(report: dict) -> dict:
     indicators = a1["indicators"]
     lines, ex = comparisons.build(report), exhibits.build(report)
     groups = {g["group"]: g["lines"] for g in lines["groups"]}
+    written = (a3.get("commentary") or {}).get("sections", {})  # older reports have no commentary: their Python lines are shown
     blocks: list[dict] = []
     number, exhibit = iter(range(1, len(SECTIONS) + 1)), iter(range(1, 10))
 
@@ -112,7 +221,7 @@ def build(report: dict) -> dict:
                        "source": source})
 
     price_sources = sorted({s_.get("publisher") for s_ in ((indicators.get("market") or {}).get("price") or {}).get("sources", [])} - {None})
-    price_source = f"share prices from {', '.join(price_sources)}; " if price_sources else ""
+    price_source = f"{', '.join(price_sources)}, " if price_sources else ""  # the share-price provider, named as a bank's note does
 
     title = f"Financial analysis: {company['name']} ({company['ticker']})"
     blocks.append({"type": "heading", "level": 1, "text": company["name"]})  # a research note leads with the company
@@ -125,8 +234,7 @@ def build(report: dict) -> dict:
                    "peers": ", ".join(p["ticker"] for p in report["peers"]["peers"]) or "none"})
 
     section("Executive summary")
-    blocks.append({"type": "statements", "items": [_statement(s_, "Based on " + ", ".join(s_.get("based_on", [])))
-                                                   for s_ in _verified_first(a3["overview"])]})
+    blocks.append({"type": "statements", "items": [_statement(s_) for s_ in _verified_first(a3["overview"])]})
 
     if a3.get("questions"):  # only when the user asked any
         section("Your questions")
@@ -146,7 +254,7 @@ def build(report: dict) -> dict:
     section("Trading comparables")
     peers = report["peers"]
     table(f"Trading comparables ({ex['comparables']['period']})", ex["comparables"],
-          f"Source: company reports and filings; {price_source}folio. calculations.")
+          f"Source: Company filings, {price_source}Verity.")
     if peers["peers"]:
         blocks.append({"type": "paragraph", "text": "Peers: " + "; ".join(f"{p['name']} ({p['label']})" for p in peers["peers"]) + "."})
     for e in peers.get("excluded", []):
@@ -155,16 +263,16 @@ def build(report: dict) -> dict:
     section("Historical valuation")
     if ex["historical"]["rows"]:
         table("Valuation against own history and peers' history", ex["historical"],
-              f"Source: company reports and filings; {price_source}folio. calculations at past fiscal year ends.")
+              f"Source: Company filings, {price_source}Verity; multiples at past fiscal year ends.")
     if groups.get("Historical comparison"):
-        blocks += _commentary(groups["Historical comparison"])
+        blocks += _written(written.get("Historical comparison"), groups["Historical comparison"])
 
     section("Financial analysis")
-    for group, group_lines in groups.items():  # written by Python from the results, never by the text model
+    for group, group_lines in groups.items():
         if group == "Historical comparison":
             continue
         blocks.append({"type": "heading", "level": 3, "text": group})
-        blocks += _commentary(group_lines)
+        blocks += _written(written.get(group), group_lines)
 
     section("Business overview and outlook")
     summary = a1["summary"]
@@ -173,7 +281,14 @@ def build(report: dict) -> dict:
         chosen = [s_ for s_ in summary if (s_.get("topic") not in known if key == "other" else s_.get("topic") == key)]
         if chosen:
             blocks.append({"type": "heading", "level": 3, "text": heading})
-            blocks.append({"type": "statements", "items": [_statement(s_) for s_ in chosen]})
+            if key == "results":  # results come grouped by the period they cover, the period named once above its group
+                periods = list(dict.fromkeys(s_.get("period") or "" for s_ in chosen))
+                for period in periods:
+                    if period:
+                        blocks.append({"type": "paragraph", "style": "lead", "text": period})
+                    blocks.append({"type": "statements", "items": [_statement(s_) for s_ in chosen if (s_.get("period") or "") == period]})
+            else:
+                blocks.append({"type": "statements", "items": [_statement(s_) for s_ in chosen]})
 
     section("Earnings call highlights")
     call = a2["call"]["statements"]
@@ -192,18 +307,19 @@ def build(report: dict) -> dict:
                                                         _statement(q["answer"], f"Answer · {q['answered_by']}"))]})
 
     section("Where the sources disagree")
-    if not a3["disagreements"]:
+    real = [d for d in a3["disagreements"] if not d.get("note")]  # reports saved earlier kept same-source items with a note
+    if not real:
         blocks.append({"type": "paragraph", "text": "No disagreements were identified."})
-    for d in a3["disagreements"]:
+    for d in real:
         blocks.append({"type": "heading", "level": 3, "text": d["topic"]})
         blocks.append({"type": "statements", "items": [_statement(p, p.get("who")) for p in d["positions"]]})
-        if d.get("note"):
-            blocks.append({"type": "paragraph", "text": d["note"]})
 
     section("Key risks")
-    blocks.append({"type": "statements", "items": [_statement(s_, "Based on " + ", ".join(s_.get("based_on", [])))
-                                                   for s_ in _verified_first(a3["risks"])]
-                   + [_statement(s_, "From the reports") for s_ in summary if s_.get("topic") == "risks"]})
+    blocks.append({"type": "statements", "items": [_statement(s_, s_.get("title") or None) for s_ in _verified_first(a3["risks"])]
+                   + [_statement(s_, s_.get("title") or None) for s_ in summary if s_.get("topic") == "risks"]})
+
+    section("Valuation summary")
+    blocks += _valuation_section(lines["valuation"], (a3.get("commentary") or {}).get("valuation", []))
 
     comparison = {row["indicator"]: row for row in a1["peer_comparison"]}
     appendix("A", "All indicators")
@@ -233,7 +349,7 @@ def build(report: dict) -> dict:
     blocks.append({"type": "list", "style": "small", "title": "Sources of each indicator", "items": _sources_by_document(indicators["current"])})
 
     appendix("D", "Not verified")
-    blocks.append({"type": "list", "style": "warn-small", "items": [f"{u['agent']}: “{u['text']}” — {' '.join(u['issues'])}"
+    blocks.append({"type": "list", "style": "warn-small", "items": [f"“{u['text']}” — {' '.join(u['issues'])}"
                                                               for u in a3["unverified_statements"]] or ["Every statement was verified."]})
 
     appendix("E", "Missing information")
@@ -242,4 +358,4 @@ def build(report: dict) -> dict:
     appendix("F", "Methodology and limitations")
     blocks.append({"type": "list", "style": "small", "items": a3["limitations"]})
 
-    return {"title": title, "blocks": blocks, "comparisons": lines, "exhibits": ex}
+    return {"title": title, "blocks": _footnotes(blocks), "comparisons": lines, "exhibits": ex}

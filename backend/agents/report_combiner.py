@@ -1,7 +1,8 @@
 # Agent 3: combines Agents 1 and 2 into one report: an overview, where the sources disagree (each position labelled with who said it),
-# the main risks, and, built in Python, what is missing, what could not be verified, and the limitations. It never calculates: every
+# the main risks, commentary on each comparison section and on the valuation summary, and, built in Python, what is missing, what could not be verified, and the limitations. It never calculates: every
 # number must come from a cited source or a Python result, and every statement is checked like the other agents' statements.
-from backend import prompts, report_blocks, retrieval, validation
+from backend import comparisons, prompts, report_blocks, retrieval, validation
+from backend.report_reader import Page
 
 AGENT = "Agent 3 – combined report"
 US_EXCHANGES = {"NYSE", "NASDAQ", "NYSE AMERICAN", "AMEX", "NYSEARCA", "ARCA"}
@@ -39,8 +40,9 @@ def _missing(agent1: dict, agent2: dict) -> list[str]:
     return items
 
 
-def _limitations(company: dict, left_out: list[str] | None = None) -> list[str]:
+def _limitations(company: dict, agent1: dict) -> list[str]:
     items = []
+    left_out = agent1["indicators"].get("left_out")
     if left_out:
         items.append(f"Indicators left out at your request ({len(left_out)}): {', '.join(left_out)}.")
     items += [
@@ -52,7 +54,10 @@ def _limitations(company: dict, left_out: list[str] | None = None) -> list[str]:
         "Indicator definitions follow docs/indicator_definitions.md v1.1.",
         "Statements labelled unverified are kept so they can be seen, but their cited source does not support them.",
     ]
-    if (company.get("exchange") or "").upper() not in US_EXCHANGES:
+    # the price check uses the calendar of the exchange the prices came from (the company's own field is often empty)
+    price = ((agent1["indicators"].get("market") or {}).get("price") or {})
+    exchanges = {(src.get("exchange") or "").upper() for src in price.get("sources", [])} or ({(company.get("exchange") or "").upper()} if price else set())
+    if exchanges - US_EXCHANGES:
         items.append("Market holidays are known only for US exchanges; for this exchange only weekends are excluded, so the "
                      "latest-session price check is approximate.")
     return items
@@ -87,13 +92,75 @@ def answer_questions(company: dict, questions: list[str], payload: dict, service
     return out
 
 
+LINES_DOC = "comparison-lines"  # the Python comparison lines, shown to the checker as one page per section
+
+
+def _with_period(citation, section_cites: list[dict]):
+    """A citation of a calculated result without a period gets the period the section's comparison lines used for it."""
+    if not isinstance(citation, dict) or "indicator" not in citation or citation.get("period"):
+        return citation
+    used = next((c for c in section_cites if c["indicator"] == citation["indicator"] and c["period"] != "peer median"), None)
+    return {**citation, "period": used["period"]} if used else citation
+
+
+def write_commentary(company: dict, agent1: dict, services, read: dict, results: list[dict], indicators: list[dict], check) -> dict:
+    """A headline and a short paragraph for each comparison section, and two or three sentences on the valuation summary, in the
+    style of a research note. The model explains what the Python comparison lines mean; each sentence is checked like every other
+    statement. A sentence that cites a section's lines may quote their numbers; its citation then becomes the calculated results
+    those lines were built from. A section the model does not cover keeps its Python lines only."""
+    built = comparisons.build({"agent1": agent1})
+    groups, valuation = built["groups"], built["valuation"]
+    if not groups:
+        return {"sections": {}, "valuation": []}
+    pages = [Page(i + 1, " ".join(line["text"] for line in g["lines"]), f"section {i + 1}") for i, g in enumerate(groups)]
+    pages.append(Page(len(pages) + 1, " ".join([p["text"] for p in valuation["parts"]] + [valuation["overall"]]), "valuation summary"))
+    lines_read = {**read, LINES_DOC: {"doc": {"title": "Comparison lines"}, "pages": pages}}
+    behind = [[c for line in g["lines"] for c in line["cites"]] for g in groups] + [[c for p in valuation["parts"] for c in p["cites"]]]
+    names = {(r["indicator"], r["period"]): r.get("name") for r in results}
+
+    def checked(statements, section: int) -> list[dict]:
+        given = validation.as_statements(statements)
+        for s in given:  # a result cited without its period takes the period this section's lines used (e.g. "FY2025 vs FY2024")
+            cites = validation.as_list(s.get("citations"))
+            s["citations"] = [_with_period(c, behind[section]) for c in cites]
+        out = check(given, lines_read)
+        for s in out:  # a citation of the lines becomes the calculated results they were built from
+            cites = []
+            for c in s["citations"]:
+                swap = ([{**x, "name": names.get((x["indicator"], x["period"]))} for x in behind[c["page"] - 1]]
+                        if c.get("doc_id") == LINES_DOC else [c])
+                cites += [x for x in swap if x not in cites]
+            s["citations"] = cites
+            s["based_on"] = sorted({_origin(c, read) for c in cites})
+        return out
+
+    data = {"ticker": company["ticker"], "company": company["name"], "indicators": indicators,
+            "sections": [{"group": g["group"], "lines": [line["text"] for line in g["lines"]], "cite_as": {"doc_id": LINES_DOC, "page": i + 1}}
+                         for i, g in enumerate(groups)],
+            "valuation_summary": {"parts": [{"against": p["benchmark"], "label": p["label"], "text": p["text"]} for p in valuation["parts"]],
+                                  "overall": valuation["overall"], "cite_as": {"doc_id": LINES_DOC, "page": len(pages)}}}
+    request = prompts.build("write_commentary", data)
+    answer = services.model.ask(request["task"], request["data"])
+    known = {g["group"] for g in groups}
+    sections = {}
+    for item in validation.as_list(answer.get("sections")):
+        if not isinstance(item, dict) or item.get("group") not in known or item["group"] in sections:
+            continue
+        section = next(i for i, g in enumerate(groups) if g["group"] == item["group"])
+        headline = checked(item.get("headline"), section)
+        paragraph = checked(item.get("paragraph"), section)
+        if headline or paragraph:
+            sections[item["group"]] = {"headline": headline[0] if headline else None, "paragraph": paragraph}
+    return {"sections": sections, "valuation": checked(answer.get("valuation"), len(groups)) if valuation["parts"] else []}
+
+
 def run(company: dict, agent1: dict, agent2: dict, services, context: dict, questions: list[str] | None = None) -> dict:
     read, results = context.get("read", {}), context.get("results", [])
     request = prompts.build("combine_report", _payload(company, agent1, agent2, results))
     answer = services.model.ask(request["task"], request["data"])
 
-    def check(statements: list[dict]) -> list[dict]:
-        checked = validation.check_statements(statements, read, results, agent1["indicators"]["current_period"])
+    def check(statements: list[dict], pages: dict | None = None) -> list[dict]:
+        checked = validation.check_statements(statements, pages or read, results, agent1["indicators"]["current_period"])
         for s in checked:
             s["based_on"] = sorted({_origin(c, read) for c in s["citations"]})
         return checked
@@ -106,18 +173,20 @@ def run(company: dict, agent1: dict, agent2: dict, services, context: dict, ques
         positions = check(d.get("positions"))
         if not positions:  # a topic with no positions is not a disagreement (for example "there are no disagreements")
             continue
-        entry = {"topic": str(d.get("topic", "")), "positions": positions}
-        if len({o for p in positions for o in p["based_on"]}) < 2:
-            entry["note"] = "All positions come from the same source, so this is not a disagreement between sources."
-        disagreements.append(entry)
+        if len({o for p in positions for o in p["based_on"]}) < 2:  # one source does not disagree with itself
+            continue
+        disagreements.append({"topic": str(d.get("topic", "")), "positions": positions})
 
     payload = _payload(company, agent1, agent2, results)
     answers = answer_questions(company, questions or [], {"read": read, "indicators": payload["indicators"]}, services, check)
+    commentary = write_commentary(company, agent1, services, read, results, payload["indicators"], check)
+    written = [s for c in commentary["sections"].values() for s in ([c["headline"]] if c["headline"] else []) + c["paragraph"]]
+    written += commentary["valuation"]
 
     unverified = [{"agent": "Agent 1", "text": s["text"], "issues": s["issues"]} for s in agent1["summary"] if not s["verified"]]
     call_items = agent2["call"]["statements"] + [s for q in agent2["call"].get("questions", []) for s in (q["question"], q["answer"])]
     unverified += [{"agent": "Agent 2", "text": s["text"], "issues": s["issues"]} for s in call_items if not s["verified"]]
-    own = overview + risks + [p for d in disagreements for p in d["positions"]] + [s for a in answers for s in a["statements"]]
+    own = overview + risks + [p for d in disagreements for p in d["positions"]] + [s for a in answers for s in a["statements"]] + written
     unverified += [{"agent": "Agent 3", "text": s["text"], "issues": s["issues"]} for s in own if not s["verified"]]
     total = len(agent1["summary"]) + len(call_items) + len(own)
 
@@ -127,8 +196,9 @@ def run(company: dict, agent1: dict, agent2: dict, services, context: dict, ques
         "disagreements": disagreements,
         "risks": risks,
         "questions": answers,
+        "commentary": commentary,
         "missing_information": _missing(agent1, agent2),
         "unverified_statements": unverified,
-        "limitations": _limitations(company, agent1["indicators"].get("left_out")),
+        "limitations": _limitations(company, agent1),
         "statement_check": {"checked": total, "verified": total - len(unverified), "unverified": len(unverified)},
     }

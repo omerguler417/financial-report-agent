@@ -100,3 +100,11 @@ def test_an_analysis_dated_today_uses_the_latest_completed_session(tmp_path, mon
     assert price.sources[0]["publisher"] == "Twelve Data"
     past = financials.closing_price(Market(series), "MSFT", date(2026, 11, 23))  # a past analysis date: that day's close
     assert past.value == 492.50
+
+
+def test_a_share_class_ticker_is_sent_the_way_twelve_data_writes_it(tmp_path):
+    # a live Coca-Cola run (28 November 2026): peer BF-B (SEC style) got no price; Twelve Data writes the class as BF.B
+    fake = FakeTwelveData()
+    series = provider(tmp_path, fake).daily_series("BF-B", date(2026, 11, 11), date(2026, 11, 25))
+    assert {r.url.params["symbol"] for r in fake.requests if r.url.path == "/time_series"} == {"BF.B"}
+    assert series.ticker == "BF-B"  # the analysis keeps the SEC ticker

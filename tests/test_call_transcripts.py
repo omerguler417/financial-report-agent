@@ -67,6 +67,10 @@ def test_the_quarter_is_the_companys_fiscal_quarter_of_the_latest_report(tmp_pat
     assert e.fiscal_quarter("EXMP", "2026-03-31") == "2026Q3"
     assert e.fiscal_quarter("EXMP", "2025-06-30") == "2025Q4"
     assert e.fiscal_quarter("EXMP", "2025-09-30") == "2026Q1"  # like Microsoft's 2027Q1 for July to September 2026
+    # 52/53-week quarters end a few days into the next month (Coca-Cola's Q3 2026 ended on 2 October; a live run asked for Q4)
+    assert e.fiscal_quarter("EXMP", "2025-10-02") == "2026Q1"
+    assert e.fiscal_quarter("EXMP", "2026-01-02") == "2026Q2"
+    assert e.fiscal_quarter("EXMP", "2026-06-27") == "2026Q4"
 
 
 ANSWERS = {

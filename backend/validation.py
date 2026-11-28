@@ -1,23 +1,36 @@
 # Checks on everything a text model returns before it is used. A figure must sit on the page it cites, with the same value; a statement
 # must cite a real source, every number in it must appear in that source or in the cited Python result, and it must not give a
-# valuation verdict or claim about what moved the share price. Figures that fail are rejected with the reason; statements that fail
+# recommendation, unbenchmarked valuation verdict or claim about what moved the share price. Figures that fail are rejected with the reason; statements that fail
 # are kept but labelled unverified, never silently dropped.
 import re
 
 from backend.financials import FIELDS
 
 NUMBER = re.compile(r"(?<![\w.,])([-−])?(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?(\s?%)?")  # a minus sign right before a number belongs to it
-VERDICT = re.compile(r"\b(under-?valued|over-?valued|cheap|expensive|bargain|should (?:buy|sell)|(?:buy|sell|hold) (?:rating|recommendation|signal)"
-                     r"|(?:is|are|looks?) a (?:buy|sell))\b", re.I)
-PRICE_MOVE = re.compile(r"\b(?:shares?|stock|share price)\b[^.]{0,40}?\b(?:fell|rose|dropped|jumped|slumped|surged|declined|climbed|tumbled|soared|rallied)\b"
+# CLAUDE.md: "expensive", "cheap" and "fairly priced" are allowed only beside a named benchmark (peers or the company's own history);
+# a mispricing claim, a recommendation or a price target is never allowed.
+RELATIVE = re.compile(r"\b(cheap|expensive|fairly (?:priced|valued))\b", re.I)
+BENCHMARK = re.compile(r"\b(?:relative to|compared (?:with|to)|against|versus|vs\.?)\s+(?:the |its |their )?(?:own )?(?:[\w-]+ ){0,3}?"
+                       r"(?:peers?|peer (?:group|median)|history|historical (?:median|average|range)|median|average|past|"
+                       r"(?:trading )?range)\b", re.I)
+VERDICT = re.compile(r"\b(under-?valued|over-?valued|bargain|should (?:buy|sell|hold)|(?:buy|sell|hold|investment) (?:rating|recommendation|signal)s?"
+                     r"|(?:is|are|looks?) a (?:buy|sell|hold)|(?:we|I) recommend|recommend(?:s|ed)? (?:buying|selling|holding)|price target)\b", re.I)
+SENTENCE = re.compile(r"(?<=[.!?])\s+")
+PRICE_MOVE = re.compile(r"(?<!per )\b(?:shares?|stock|share price)\b[^.]{0,40}?\b(?:fell|rose|dropped|jumped|slumped|surged|declined|climbed|tumbled|soared|rallied)\b"
                         r"|\bsent (?:the )?(?:shares|stock)\b", re.I)
 
 
 def wording_issues(text: str) -> list[str]:
-    """CLAUDE.md: no valuation verdicts or recommendations, and no claim about what moved the share price."""
+    """CLAUDE.md: no recommendations or mispricing claims, relative valuation only against a named benchmark, and no claim about
+    what moved the share price."""
     issues = []
     if m := VERDICT.search(text):
         issues.append(f"Wording: '{m.group(0)}' is a valuation verdict or recommendation, which the report must not give.")
+    for sentence in SENTENCE.split(text):
+        if (m := RELATIVE.search(sentence)) and not BENCHMARK.search(sentence):
+            issues.append(f"Wording: '{m.group(0)}' is a valuation verdict without a benchmark; say what it is measured against "
+                          "(its peers or its own history).")
+            break
     if PRICE_MOVE.search(text):
         issues.append("Wording: claims a cause for a share-price move; overlapping timing is not evidence of cause.")
     return issues
@@ -132,6 +145,19 @@ def _result_matches(number: tuple, result: dict) -> bool:
     return abs(round(shown, decimals) - value) < 1e-9 and (percent or result.get("unit") != "fraction")
 
 
+def _calculated_figure(number: tuple, results: list[dict], current_period: str | None) -> list[dict]:
+    """The current-period or peer-median results a number exactly is, as Python formats them (two decimals). A model that quotes a
+    calculated figure but forgets its citation then still cites the right source; a rounded or older figure is not matched."""
+    if number[2] != 2:
+        return []
+    periods = {current_period, "peer median"} if current_period else None
+
+    def this_analysis(r):  # the current results (whatever their period label), peer medians and own historical medians
+        return (periods is None or r.get("current") or r.get("period") in periods
+                or str(r.get("period", "")).startswith("year ends"))
+    return [r for r in results if this_analysis(r) and _result_matches(number, r)]
+
+
 def _strip_references(text: str, read: dict) -> str:
     """Remove document references the model wrote into a sentence, such as "[0001193125-26-323660]", "(10-K, page 35)" or "[1]": the
     citations already carry them, and their digits are not figures."""
@@ -149,15 +175,163 @@ def _find_result(citation: dict, results: list[dict], current_period: str | None
     matches = [r for r in results if r["indicator"].lower() == ref or str(r.get("name", "")).strip().lower() == ref]
     period = citation.get("period")
     if period:
-        return next((r for r in matches if r["period"] == period), None)
+        exact = next((r for r in matches if r["period"] == period), None)
+        starts = [r for r in matches if str(r["period"]).startswith(f"{period} vs ")]  # "FY2026" for "FY2026 vs FY2025"
+        one = len({r["period"] for r in starts}) == 1  # the same result may be listed twice (current and history)
+        return exact or (next((r for r in starts if r.get("current")), starts[0]) if starts and one else None)
     current = [r for r in matches if r["period"] == current_period] if current_period else []
     if current:
         return current[0]
+    flagged = {r["period"]: r for r in matches if r.get("current")}  # the current result under its own label ("FY2026 vs FY2025")
+    if len(flagged) == 1:
+        return next(iter(flagged.values()))
     return matches[0] if len(matches) == 1 else None
 
 
+WRAPPED = re.compile(r"""['"]indicator['"]\s*:\s*['"]([^'"]+)['"](?:\s*,\s*['"]period['"]\s*:\s*['"]([^'"]+)['"])?""")
+
+
+def _unwrapped(c):
+    """A citation the model wrote as text inside the indicator field ("{'indicator': 'pe', 'period': 'FY2026'}") as an object."""
+    if isinstance(c, dict) and isinstance(c.get("indicator"), str) and (m := WRAPPED.search(c["indicator"])):
+        return {"indicator": m.group(1), **({"period": m.group(2)} if m.group(2) else {})}
+    return c
+
+
 def _blank(c) -> bool:
-    return isinstance(c, dict) and not str(c.get("doc_id") or "").strip() and not str(c.get("indicator") or "").strip()
+    """A placeholder copied from the answer format: no document or indicator, or a document's page left at the template's 0."""
+    if not isinstance(c, dict) or str(c.get("indicator") or "").strip():
+        return False
+    return not str(c.get("doc_id") or "").strip() or ("page" in c and c["page"] in (0, "0") and not c.get("section"))
+
+
+UP = re.compile(r"\b(?:above|higher|exceeds?|exceeding|premium|richer|expensive|ahead of|outpaces?)\b", re.I)
+DOWN = re.compile(r"\b(?:below|lower|discount|cheap|cheaper|trails?|trailing|behind)\b", re.I)
+
+
+def _shown(r: dict) -> str:
+    return f"{r['value'] * 100:,.2f}%" if r.get("unit") == "fraction" else f"{r['value']:,.2f}{'x' if r.get('unit') == 'x' else ''}"
+
+
+CLAUSE = re.compile(r",\s+|;\s+|\s+(?:and|while|whereas|but)\s+")
+CONTINUES = re.compile(r"\s*(?:including|with|such as|led by|notably|e\.g\.|for example|namely)\b", re.I)
+
+
+def _multiple_name(indicator: str) -> str | None:
+    from backend.indicators import HIST_NAMES  # the multiples compared with their own history: "P/E", "EV/EBITDA", ...
+    return HIST_NAMES.get(indicator.removesuffix("_vs_hist")) if indicator.endswith("_vs_hist") else None
+
+
+def _names(name: str, text: str) -> bool:  # "EV/EBIT" is not named by "EV/EBITDA"
+    return re.search(re.escape(name) + r"(?![A-Za-z])", text) is not None
+
+
+def _clauses(text: str) -> list[str]:
+    """Clauses of each sentence; a bare figure ("… by 30.06% and 13.40%") stays with the clause before it."""
+    out = []
+    for sentence in SENTENCE.split(text):
+        for i, c in enumerate(CLAUSE.split(sentence)):
+            if i and not re.search(r"[A-Za-z]{3,}", c):
+                out[-1] = f"{out[-1]} and {c}"
+            else:
+                out.append(c)
+    return out
+
+
+def _own_difference(number: tuple, text: str, results: list[dict]) -> list[dict]:
+    """"P/E is 30.06% below its historical median" for a stored -30.06%: the company's own difference from its history, matched
+    only when the same clause names the multiple and says below. The peers' differences are never matched this way."""
+    written, value, decimals, percent = number
+    if value <= 0 or not percent:
+        return []
+    out = []
+    for r in results:
+        name = _multiple_name(r["indicator"])
+        if not name or r.get("period") == "peer median" or r.get("value") is None or r["value"] >= 0:
+            continue
+        def names_it(clause):  # the clause names the multiple, or speaks of "those multiples" named elsewhere in its sentence
+            sentence = next((x for x in SENTENCE.split(text) if clause in x), "")
+            return _names(name, clause) or (re.search(r"\b(?:multiples?|medians?)\b", clause, re.I) and _names(name, sentence))
+        if abs(round(-r["value"] * 100, decimals) - value) < 1e-9 and any(
+                written in c and names_it(c) and DOWN.search(c) and not UP.search(c) for c in _clauses(text)):
+            out.append(r)
+    return out
+
+
+def _history_direction(text: str, results: list[dict]) -> list[str]:
+    """A stated difference from the company's own historical median must point the right way ("below … by 15.91%" for +15.91%)."""
+    issues = []
+    for clause in _clauses(text):
+        up, down = bool(UP.search(clause)), bool(DOWN.search(clause))
+        if up == down:
+            continue
+        numbers = [n for n in numbers_in(clause) if n[2] == 2 and n[3]]
+        for r in results:
+            name = _multiple_name(r["indicator"])
+            if not name or not _names(name, clause) or r.get("period") == "peer median" or not r.get("value"):
+                continue
+            if any(abs(round(abs(r["value"]) * 100, 2) - abs(n[1])) < 1e-9 for n in numbers):
+                actual = "above" if r["value"] > 0 else "below"
+                if (actual == "above") != up:
+                    issues.append(f"Direction: {name} is {abs(r['value']) * 100:,.2f}% {actual} its own historical median, but the "
+                                  f"sentence says {'above' if up else 'below'}.")
+    return issues
+
+
+def direction_issues(text: str, results: list[dict]) -> list[str]:
+    """A clause that quotes a figure and its peer median or own historical median must not say "above" when the figure is below
+    (or the reverse). Read clause by clause: a clause without a direction word takes the previous clause's ("ratios above peer
+    medians, including P/E at 28.64x versus 36.03x"); a clause with both directions is left alone."""
+    issues = []
+    for sentence in SENTENCE.split(text):
+        previous = None
+        for clause in CLAUSE.split(sentence):
+            up, down = bool(UP.search(clause)), bool(DOWN.search(clause))
+            if up and down:
+                previous = None
+                continue
+            if up or down:
+                previous = "above" if up else "below"
+            elif not CONTINUES.match(clause):  # only "including …", "with …", "such as …" carry on the previous clause's direction
+                previous = None
+            if previous is None:
+                continue
+            numbers = [n for n in numbers_in(clause) if n[2] == 2]  # figures as Python shows them (25.66x, 18.80%), not counts
+
+            def quoted(r):
+                return r.get("value") is not None and any(_result_matches(n, r) for n in numbers)
+            for r in results:
+                if r.get("period") == "peer median" or r["indicator"].endswith("_hist_median") or not quoted(r):
+                    continue
+                for b in results:
+                    is_benchmark = ((b["indicator"] == r["indicator"] and b.get("period") == "peer median")
+                                    or b["indicator"] == f"{r['indicator']}_hist_median")
+                    if not is_benchmark or not quoted(b) or _shown(r) == _shown(b):
+                        continue
+                    actual = "above" if r["value"] > b["value"] else "below"
+                    if actual != previous:
+                        what = "the peer median" if b.get("period") == "peer median" else "its own historical median"
+                        issue = (f"Direction: {r.get('name') or r['indicator']} of {_shown(r)} is {actual} {what} of {_shown(b)}, but the "
+                                 f"sentence says {previous}.")
+                        if issue not in issues:
+                            issues.append(issue)
+    return issues + [i for i in _history_direction(text, results) if i not in issues]
+
+
+def _peer_history_issues(text: str, results: list[dict]) -> list[str]:
+    """The peers' median of their own historical medians must not be presented as the company's own ("its historical median of
+    29.33x"). Read clause by clause; a clause that names the peers, or does not speak of the company's own, is left alone."""
+    issues = []
+    for clause in _clauses(text):
+        if re.search(r"\bpeer", clause, re.I) or not re.search(r"\b(?:its|own|the company'?s?)\b", clause, re.I):
+            continue
+        for n in (n for n in numbers_in(clause) if n[2] == 2):
+            peers = [r for r in results if r["indicator"].endswith("_hist_median") and r.get("period") == "peer median" and _result_matches(n, r)]
+            own = [r for r in results if r.get("period") != "peer median" and _result_matches(n, r)]
+            if peers and not own:
+                issues.append(f"The figure {n[0]} is the peers' median of their own historical medians, not the company's; the sentence "
+                              "does not say it is the peers'.")
+    return issues
 
 
 def check_statements(statements: list[dict], read: dict, results: list[dict], current_period: str | None = None) -> list[dict]:
@@ -167,7 +341,12 @@ def check_statements(statements: list[dict], read: dict, results: list[dict], cu
     for s in as_statements(statements):
         s = {**s, "text": _strip_references(str(s.get("text", "")), read)}
         issues, texts, cited_results, citations = [], [], [], []
-        given = [c for c in as_list(s.get("citations")) if not _blank(c)]  # an empty placeholder copied from the answer format is no citation
+        known = {r["indicator"] for r in results}
+        given = [_unwrapped(c) for c in as_list(s.get("citations"))]
+        given = [({"indicator": c["doc_id"], **({"period": c["period"]} if c.get("period") else {})}  # an indicator written as a document id
+                  if isinstance(c, dict) and "indicator" not in c and c.get("doc_id") not in read and c.get("doc_id") in known else c)
+                 for c in given]
+        given = [c for c in given if not _blank(c)]  # an empty placeholder copied from the answer format is no citation
         for c in given:
             if not isinstance(c, dict):
                 issues.append(f"A citation was not in the expected form ({str(c)[:40]}).")
@@ -190,9 +369,18 @@ def check_statements(statements: list[dict], read: dict, results: list[dict], cu
             issues.append("No source cited.")
         for number in numbers_in(s.get("text", "")):
             in_text = any(abs(n[1] - number[1]) < 1e-9 for t in texts for n in numbers_in(t))
-            if not in_text and not any(_result_matches(number, r) for r in cited_results):
-                issues.append(f"The number {number[0]} was not found in the cited source or the cited calculated result.")
-        issues += wording_issues(s.get("text", ""))
+            if in_text or any(_result_matches(number, r) for r in cited_results):
+                continue
+            found = _calculated_figure(number, results, current_period) or _own_difference(number, s.get("text", ""), results)
+            if found:  # exactly a figure Python calculated in this analysis: sourced to that result
+                cited_results += found
+                citations += [{"indicator": r["indicator"], "period": r["period"], "name": r.get("name")} for r in found
+                              if {"indicator": r["indicator"], "period": r["period"], "name": r.get("name")} not in citations]
+                continue
+            issues.append(f"The number {number[0]} was not found in the cited source or the cited calculated result.")
+        issues += wording_issues(s.get("text", "")) + wording_issues(str(s.get("title") or ""))  # a risk's short title too
+        issues += direction_issues(s.get("text", ""), results)
+        issues += _peer_history_issues(s.get("text", ""), results)
         extra = {k: v for k, v in s.items() if k not in ("text", "citations", "verified", "label", "issues")}
         checked.append({**extra, "text": str(s.get("text", "")), "citations": citations, "verified": not issues,
                         "label": "verified" if not issues else "unverified", "issues": issues})

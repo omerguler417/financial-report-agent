@@ -105,8 +105,9 @@ class FakeSEC:
             return httpx2.Response(200, text=FILING_HTML, headers={"content-type": "text/html"})
         if url.endswith("/chat/completions"):
             body = json.loads(request.content)
-            task = next(t for t in self.answers if f'"{t}"' in body["messages"][-1]["content"] or t in body["messages"][0]["content"])
-            return httpx2.Response(200, json={"choices": [{"message": {"content": json.dumps(self.answers[task])}}]})
+            task = next((t for t in self.answers if f'"{t}"' in body["messages"][-1]["content"] or t in body["messages"][0]["content"]), None)
+            answer = self.answers[task] if task else {}  # a task without a recorded answer gets an empty one
+            return httpx2.Response(200, json={"choices": [{"message": {"content": json.dumps(answer)}}]})
         return httpx2.Response(404)
 
 
@@ -417,6 +418,37 @@ def test_notes_and_loans_count_as_debt_and_a_zero_tag_does_not_hide_the_real_fig
     assert f[("debt_ex_leases", "FY2024")]["value"] == pytest.approx(45000)
     assert f[("debt_ex_leases", "YTD Q3 2026")]["value"] == pytest.approx(44000)
     assert "LongTermNotesAndLoans" in f[("debt_ex_leases", "YTD Q3 2026")]["note"]
+
+
+def test_debt_reported_with_finance_leases_is_used_without_counting_the_leases_twice(tmp_path):
+    # decided 28 November 2026 (a live Coca-Cola run): KO tags its debt only together with finance ("capital") leases
+    def change(gaap, dei):
+        del gaap["LongTermDebt"]
+        gaap["LongTermDebtAndCapitalLeaseObligations"] = tag("USD", *[(p, v * B, f) for p, v, f in balances(50, 46, 48, 44)])
+        gaap["LongTermDebtAndCapitalLeaseObligationsCurrent"] = tag("USD", *[(p, v * B, f) for p, v, f in balances(8, 9, 8, 10)])
+        gaap["NotesAndLoansPayable"] = tag("USD", *[(p, v * B, f) for p, v, f in balances(4, 5, 4, 6)])
+        gaap["CommercialPaper"] = tag("USD", ("2025-06-30", 3 * B, K25))  # part of notes and loans payable: not added again
+    f, _ = figures_with(tmp_path, change)
+    debt = f[("debt_ex_leases", "FY2025")]
+    assert debt["value"] == pytest.approx(46000 + 9000 + 5000 - 11000)  # minus the tagged finance-lease liability
+    assert "FinanceLeaseLiability" in debt["note"] and "LongTermDebtAndCapitalLeaseObligations" in debt["note"]
+    assert f[("lease_liabilities", "FY2025")]["value"] == pytest.approx(16000 + 11000)  # leases added once, in total debt
+
+    def untagged(gaap, dei):
+        change(gaap, dei)
+        del gaap["FinanceLeaseLiability"]
+    g, _ = figures_with(tmp_path, untagged)
+    debt = g[("debt_ex_leases", "FY2025")]
+    assert debt["value"] == pytest.approx(46000 + 9000 + 5000) and "includes finance-lease obligations" in debt["note"]
+    assert g[("lease_liabilities", "FY2025")]["value"] == pytest.approx(16000)  # so they are not added a second time
+
+
+def test_current_marketable_securities_count_as_short_term_investments(tmp_path):
+    # a live Apple run (28 November 2026): Apple tags them MarketableSecuritiesCurrent, so its quick ratio was missing
+    def change(gaap, dei):
+        gaap["MarketableSecuritiesCurrent"] = tag("USD", *[(p, v * B, f) for p, v, f in balances(8, 9, 8.5, 10)])
+    f, _ = figures_with(tmp_path, change)
+    assert f[("short_term_investments", "FY2025")]["value"] == pytest.approx(9000)
 
 
 def test_the_cover_page_share_count_is_used_when_the_balance_sheet_has_none(tmp_path):

@@ -72,7 +72,9 @@ def company_inputs(company: dict, services, as_of: date, read_documents: bool = 
     price, points, price_note = None, {}, ""
     try:
         price = financials.closing_price(services.market, company["ticker"], as_of)
-        points = financials.price_points(services.market, company["ticker"], as_of, years=horizon)
+        year_ends = sorted({date.fromisoformat(f["end"]) for f in check["accepted"]  # the fiscal year-ends the reports give
+                            if f.get("end") and f["period"].startswith("FY") and f["field"] == "equity_common"})
+        points = financials.price_points(services.market, company["ticker"], as_of, years=horizon, year_ends=year_ends)
     except ProviderNotConfigured:
         price_note = "no market-data provider is configured"
         notes.append("Share prices are not available: no market-data provider is configured, so price-based indicators and peers "
@@ -92,7 +94,7 @@ def company_inputs(company: dict, services, as_of: date, read_documents: bool = 
 
 
 def _results(analysis: dict) -> list[dict]:
-    rows = [r.to_dict() for r in analysis["current"]]
+    rows = [{**r.to_dict(), "current": True} for r in analysis["current"]]  # this analysis's own results, whatever their period label
     return rows + [r.to_dict() for fy in analysis["history"].values() for r in fy]
 
 

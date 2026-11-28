@@ -159,8 +159,23 @@ def answer_questions(data: dict) -> dict:
     return {"answers": answers}
 
 
+def write_commentary(data: dict) -> dict:
+    """A headline and two sentences for each section, built from the section's own lines, and the valuation summary explained."""
+    sections = []
+    for section in data["sections"]:
+        cite = [section["cite_as"]]
+        sections.append({"group": section["group"],
+                         "headline": {"text": f"{section['group']}: where the company stands against its benchmarks", "citations": cite},
+                         "paragraph": [{"text": f"The comparison shows: {section['lines'][0]}", "citations": cite},
+                                       {"text": "This could reflect differences in business mix and growth expectations.", "citations": cite}]})
+    summary = data["valuation_summary"]
+    valuation = [{"text": summary["overall"], "citations": [summary["cite_as"]]},
+                 {"text": "This may reflect how differently investors view the company's growth prospects.", "citations": [summary["cite_as"]]}]
+    return {"sections": sections, "valuation": valuation if summary["parts"] else []}
+
+
 ANSWERS = {"extract_figures": extract_figures, "summarise_reports": summarise_reports, "analyse_call": analyse_call,
-           "combine_report": combine_report, "answer_questions": answer_questions}
+           "combine_report": combine_report, "answer_questions": answer_questions, "write_commentary": write_commentary}
 
 
 def answer(task: str, data: dict) -> dict:

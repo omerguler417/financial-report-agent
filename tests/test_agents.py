@@ -148,6 +148,118 @@ def test_agent3_flags_verdicts_and_gathers_what_is_missing_or_unverified(tmp_pat
     assert a3["statement_check"]["unverified"] == 2
 
 
+# Commentary (approved 28 November 2026): Agent 3 writes a headline and a short paragraph for each comparison section, and explains the
+# Python-decided valuation summary. Each sentence is checked like every other statement; one that cites the comparison lines may quote
+# their numbers and ends up citing the calculated results behind them.
+def test_agent3_writes_checked_commentary_for_each_section_and_the_valuation_summary(tmp_path):
+    a1, _, a3 = run_all(tmp_path)
+    sections = a3["commentary"]["sections"]
+    assert "Valuation" in sections
+    for group, c in sections.items():
+        assert c["headline"]["verified"] and c["paragraph"] and all(s["verified"] for s in c["paragraph"]), group
+        for s in [c["headline"], *c["paragraph"]]:
+            assert s["citations"] and all("indicator" in x for x in s["citations"]), s  # the lines' results, never the lines themselves
+    assert a3["commentary"]["valuation"] and all(s["verified"] for s in a3["commentary"]["valuation"])
+    assert any("relative to its peers" in s["text"] for s in a3["commentary"]["valuation"])
+
+
+def test_commentary_that_fails_the_check_is_listed_as_unverified(tmp_path):
+    services, context = demo_services(), {}
+    peers = choose_peers(D.TARGET, services, make_settings(tmp_path))
+    a1 = agent1.run(COMPANY, peers, services, ON, context)
+    a2 = agent2.run(COMPANY, services, ON, context)
+    original = services.model.ask
+
+    def answer(task, data):
+        if task != "write_commentary":
+            return original(task, data)
+        first = data["sections"][0]
+        return {"sections": [{"group": first["group"], "headline": {"text": "The shares are cheap.", "citations": [first["cite_as"]]},
+                              "paragraph": [{"text": "Margins of 99.9% could explain it.", "citations": [first["cite_as"]]}]}],
+                "valuation": []}
+    services.model.ask = answer
+    a3 = agent3.run({**COMPANY, "exchange": "NYSE"}, a1, a2, services, context)
+    c = a3["commentary"]["sections"][data_group(a3)]
+    assert not c["headline"]["verified"] and "without a benchmark" in c["headline"]["issues"][0]
+    assert not c["paragraph"][0]["verified"] and "99.9%" in c["paragraph"][0]["issues"][0]
+    texts = [u["text"] for u in a3["unverified_statements"] if u["agent"] == "Agent 3"]
+    assert "The shares are cheap." in texts and "Margins of 99.9% could explain it." in texts
+
+
+def test_a_commentary_citation_without_its_period_takes_the_period_its_section_used(tmp_path):
+    # a live Coca-Cola run (28 November 2026): "Diluted EPS growth" (FY2025 vs FY2024) was cited without a period and failed
+    from backend import comparisons
+    services, context = demo_services(), {}
+    peers = choose_peers(D.TARGET, services, make_settings(tmp_path))
+    a1 = agent1.run(COMPANY, peers, services, ON, context)
+    a2 = agent2.run(COMPANY, services, ON, context)
+    current = a1["indicators"]["current_period"]
+    groups = comparisons.build({"agent1": a1})["groups"]
+    group, cite = next((g["group"], c) for g in groups for line in g["lines"] for c in line["cites"]
+                       if c["period"] not in (current, "peer median"))
+    original = services.model.ask
+
+    def answer(task, data):
+        if task != "write_commentary":
+            return original(task, data)
+        section = next(x for x in data["sections"] if x["group"] == group)
+        return {"sections": [{"group": group, "headline": {"text": "A headline.", "citations": [section["cite_as"]]},
+                              "paragraph": [{"text": "The measure is explained here.",
+                                             "citations": [section["cite_as"], {"indicator": cite["indicator"]}]}]}], "valuation": []}
+    services.model.ask = answer
+    a3 = agent3.run({**COMPANY, "exchange": "NYSE"}, a1, a2, services, context)
+    [point] = a3["commentary"]["sections"][group]["paragraph"]
+    assert point["verified"], point["issues"]
+    assert {"indicator": cite["indicator"], "period": cite["period"]} in [{k: c[k] for k in ("indicator", "period")} for c in point["citations"]]
+
+
+def test_the_holiday_warning_follows_the_exchange_the_prices_came_from():
+    # a live run (28 November 2026): SEC search leaves the company's exchange empty, so every report warned about non-US holidays
+    def agent1_with(exchange):
+        return {"indicators": {"market": {"price": {"sources": [{"publisher": "Twelve Data", "date": "2026-11-27", "exchange": exchange}]}}}}
+    company = {"ticker": "KO", "exchange": None}
+    assert not any("holidays" in x for x in agent3._limitations(company, agent1_with("NYSE")))
+    assert not any("holidays" in x for x in agent3._limitations(company, agent1_with("NASDAQ")))
+    assert any("holidays" in x for x in agent3._limitations(company, agent1_with("XETR")))
+    assert not any("holidays" in x for x in agent3._limitations(company, {"indicators": {}}))  # no price, no price check
+
+
+def data_group(a3):
+    return next(iter(a3["commentary"]["sections"]))
+
+
+def test_only_real_disagreements_between_different_sources_are_kept(tmp_path):
+    # decided 28 November 2026: positions that all come from one source are not a disagreement, so they are left out
+    services, context = demo_services(), {}
+    peers = choose_peers(D.TARGET, services, make_settings(tmp_path))
+    a1 = agent1.run(COMPANY, peers, services, ON, context)
+    a2 = agent2.run(COMPANY, services, ON, context)
+    original = services.model.ask
+
+    def answer(task, data):
+        out = original(task, data)
+        if task == "combine_report":
+            call = out["disagreements"][0]["positions"][0]["citations"]
+            out["disagreements"].append({"topic": "Same source", "positions": [
+                {"who": "Chief executive", "text": "Margins may come under pressure.", "citations": call},
+                {"who": "Chief financial officer", "text": "Capital spending stays in line.", "citations": call}]})
+        return out
+    services.model.ask = answer
+    a3 = agent3.run({**COMPANY, "exchange": "NYSE"}, a1, a2, services, context)
+    assert "Same source" not in [d["topic"] for d in a3["disagreements"]] and a3["disagreements"]
+    assert all("note" not in d for d in a3["disagreements"])
+
+
+def test_results_carry_their_period_and_risks_a_short_title():
+    # decided 28 November 2026: results are grouped by period and explained; each risk gets a 2-4 word title
+    text = prompts.TASKS["summarise_reports"]["instructions"] + prompts.TASKS["combine_report"]["instructions"]
+    assert "period" in text and "title" in text
+    import json
+    assert '"period"' in json.dumps(prompts.TASKS["summarise_reports"]["answer_format"])
+    assert '"title"' in json.dumps(prompts.TASKS["summarise_reports"]["answer_format"])
+    assert '"title"' in json.dumps(prompts.TASKS["combine_report"]["answer_format"]["risks"])
+
+
 def test_the_model_gets_formatted_values_with_their_signs_never_raw_numbers(tmp_path):
     services = demo_services()
     asked = []
@@ -188,8 +300,7 @@ def test_a_badly_shaped_model_answer_is_labelled_unverified_never_a_crash(tmp_pa
     a3 = agent3.run({**COMPANY, "exchange": "NYSE"}, a1, a2, services, context)
     assert a3["overview"][0]["text"] == "Revenue grew." and not a3["overview"][0]["verified"]
     assert "No source cited" in a3["overview"][0]["issues"][0]
-    assert [d["topic"] for d in a3["disagreements"]] == ["Margins"]
-    assert all(not p["verified"] for d in a3["disagreements"] for p in d["positions"])
+    assert a3["disagreements"] == []  # positions citing no source are not a disagreement between sources (28 November 2026)
     assert a3["risks"][0]["text"] == "Competition." and not a3["risks"][0]["verified"]
 
 
@@ -270,3 +381,80 @@ def test_an_answer_given_by_two_people_is_checked_speaker_by_speaker():
     one_turn = {**both, "citations": [{"doc_id": "call", "page": 1}], "issues": []}
     agent2._check_speaker(one_turn, "Satya Nadella (Chairman and CEO) and Amy Hood (CFO)", read)
     assert not one_turn["verified"] and "Amy Hood (CFO)" in one_turn["issues"][0]  # her turn is not cited
+
+
+def test_a_speaker_is_matched_by_name_whatever_the_title_is_shortened_to():
+    # a live Microsoft run (27 November 2026): the turn says "Chief Executive Officer", the model wrote "CEO"
+    from backend.report_reader import pages_from_texts
+    read = {"call": {"doc": {"doc_id": "call", "title": "Call", "url": None},
+                     "pages": pages_from_texts(["Turn 25 · Satya Nadella (Chairman and Chief Executive Officer)\\nIt will be a slower move."])}}
+    shortened = {"text": "It will be a slower move.", "citations": [{"doc_id": "call", "page": 1}], "issues": []}
+    agent2._check_speaker(shortened, "Satya Nadella (Chairman and CEO)", read)
+    assert shortened["verified"], shortened["issues"]
+    other = {**shortened, "issues": []}
+    agent2._check_speaker(other, "Amy Hood (CFO)", read)
+    assert not other["verified"]  # someone else's turn still fails
+
+
+def test_company_speakers_get_their_official_title_from_the_transcript_and_analysts_their_name():
+    # decided 28 November 2026: "Satya Nadella (Chairman and Chief Executive Officer)", not the model's "(Chairman and CEO)"
+    from backend.report_reader import pages_from_texts
+    read = {"call": {"doc": {"doc_id": "call", "title": "Call", "url": None},
+                     "pages": pages_from_texts(["Turn 24 of 30 · Satya Nadella (Chairman and Chief Executive Officer)\nCoding will move faster.",
+                                                "Turn 25 of 30 · Amy Hood (Executive Vice President and Chief Financial Officer)\nIt will be slower.",
+                                                "Turn 26 of 30 · Brent Thill (Analyst)\nHow fast?"])}}
+    cite = [{"doc_id": "call", "page": 1}, {"doc_id": "call", "page": 2}]
+    assert agent2._official("Satya Nadella (Chairman and CEO) and Amy Hood (CFO)", cite, read) == (
+        "Satya Nadella (Chairman and Chief Executive Officer) and Amy Hood (Executive Vice President and Chief Financial Officer)")
+    assert agent2._official("Brent Thill (Jefferies)", [{"doc_id": "call", "page": 3}], read, with_title=False) == "Brent Thill"
+    assert agent2._official("Someone Else (CEO)", cite, read) == "Someone Else (CEO)"  # not in the cited turns: left as written
+
+
+def test_an_analyst_named_with_the_firm_is_matched_by_name():
+    # final Microsoft run (28 November 2026): "Adam Wood with Morgan Stanley" was looked for as a whole in the transcript
+    from backend.report_reader import pages_from_texts
+    read = {"call": {"doc": {"doc_id": "call", "title": "Call", "url": None},
+                     "pages": pages_from_texts(["Turn 30 of 60 · Adam Wood (Analyst)\nHow should we think about returns?"])}}
+    asked = {"text": "How should we think about returns?", "citations": [{"doc_id": "call", "page": 1}], "issues": []}
+    agent2._check_speaker(asked, "Adam Wood with Morgan Stanley", read)
+    assert asked["verified"], asked["issues"]
+    assert agent2._official("Adam Wood with Morgan Stanley", [{"doc_id": "call", "page": 1}], read, with_title=False) == "Adam Wood"
+
+
+def test_a_short_first_name_matches_the_full_name_in_the_transcript():
+    # final Apple run (28 November 2026): the model wrote "Ben Reitzes", the transcript says "Benjamin Reitzes"
+    from backend.report_reader import pages_from_texts
+    read = {"call": {"doc": {"doc_id": "call", "title": "Call", "url": None},
+                     "pages": pages_from_texts(["Turn 50 of 73 · Benjamin Reitzes (Analyst)\nWhat does cash neutral mean now?"])}}
+    asked = {"text": "What does cash neutral mean now?", "citations": [{"doc_id": "call", "page": 1}], "issues": []}
+    agent2._check_speaker(asked, "Ben Reitzes (Analyst)", read)
+    assert asked["verified"], asked["issues"]
+    assert agent2._official("Ben Reitzes (Analyst)", [{"doc_id": "call", "page": 1}], read, with_title=False) == "Benjamin Reitzes"
+    other = {**asked, "issues": []}
+    agent2._check_speaker(other, "Ben Smith (Analyst)", read)
+    assert not other["verified"]  # another surname is another person
+
+
+def test_the_model_is_warned_that_a_peers_historical_median_is_not_the_companys():
+    # final Microsoft run: "its own historical median of 35.05x" quoted the peers' median of their medians
+    assert "is the peers' figure, never the company's own" in prompts.COMMON
+
+
+def test_the_model_is_told_to_cite_calculated_figures_and_keep_points_short():
+    """A real run (28 November 2026): one long overview paragraph quoted P/E and EV/sales but cited only the reports."""
+    assert "must include that indicator's cite_as object" in prompts.COMMON
+    assert "one or two sentences" in prompts.TASKS["combine_report"]["instructions"]
+
+
+def test_the_executive_summary_picks_the_indicators_that_matter_and_says_what_they_mean():
+    # a live Microsoft run (28 November 2026): two overview points listed twenty ratios with no meaning; the tables already show them
+    text = prompts.TASKS["combine_report"]["instructions"]
+    assert "never list indicators" in text and "say what it means" in text and "exhibits" in text
+    assert "put calculated indicators in a point of their own" not in text
+    assert not any(n in text for n in ("two or three indicators", "at most 3"))  # no fixed number: only the ones that matter
+
+
+def test_the_valuation_commentary_explains_instead_of_repeating_the_summary():
+    # a live Coca-Cola run (28 November 2026): two of three sentences repeated the Python summary word for word
+    text = prompts.TASKS["write_commentary"]["instructions"]
+    assert "do not repeat its sentences" in text

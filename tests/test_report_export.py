@@ -58,7 +58,7 @@ def test_a_short_report_has_no_label_in_either_file():
                        {"type": "paragraph", "text": "Analysis date 2026-11-20"}]}
     assert not any("DEMO" in page for page in pdf_pages(report_export.to_pdf(view)))
     headers, body = docx_text(report_export.to_docx(view))
-    assert not any(h.strip() for h in headers) and "X Corp" in body
+    assert all("Verity" in h and "DEMO" not in h for h in headers) and "X Corp" in body
 
 
 def test_the_download_endpoints_return_files_with_a_clear_name(demo):
@@ -81,5 +81,33 @@ def test_both_files_show_the_exhibits_with_sources_the_key_data_and_the_footer(d
     for text in (pdf, body):
         for title in ("Exhibit 1: Financial summary", "Exhibit 2: Trading comparables", "Exhibit 3: Valuation against own history"):
             assert title in text, title
-        assert "Source: company reports and filings" in text and "Market capitalisation" in text and "Peer median" in text
+        assert "Source: Company filings" in text and "Market capitalisation" in text and "Peer median" in text
     assert "Not investment advice" in pdf and "Not investment advice" in footers
+
+
+def test_the_files_carry_the_project_name_and_no_placeholder_brand(demo):
+    _, _, view = demo
+    pdf = " ".join(pdf_pages(report_export.to_pdf(view)))
+    _, body = docx_text(report_export.to_docx(view))
+    assert "Verity" in pdf and "Financial Report Analysis Agent" in pdf and "folio" not in pdf.lower() and "folio" not in body.lower()
+    assert "our calculations" not in pdf.lower() and "Source: Company filings" in pdf  # report-style source lines (28 November 2026)
+
+
+def test_both_files_show_the_commentary_and_the_valuation_summary(demo):
+    _, _, view = demo
+    pdf = " ".join(pdf_pages(report_export.to_pdf(view)))
+    _, body = docx_text(report_export.to_docx(view))
+    body = " ".join(body.split())
+    first = next(b for b in view["blocks"] if b["type"] == "commentary" and b["headline"])
+    for text in (pdf, body):
+        assert first["headline"] in text and first["text"][:60] in text and "calculations in Appendix A" in text  # its footnote
+        assert "Taken together, the company looks" in text and "It is not investment advice." in text and "Against own history" in text
+
+
+def test_both_files_give_footnote_numbers_and_each_sections_sources_not_a_source_line_per_point(demo):
+    _, _, view = demo
+    pdf = " ".join(pdf_pages(report_export.to_pdf(view)))
+    _, body = docx_text(report_export.to_docx(view))
+    for text in (pdf, body):
+        assert "Source: Annual report" not in text and "Calculated: P/E" not in text  # no source line under each point
+        assert "Annual report FY2025 (demo), p. 6" in text and "sources in Appendix C" in text  # the sections' source lists

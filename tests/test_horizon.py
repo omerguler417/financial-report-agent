@@ -88,6 +88,22 @@ def test_year_end_prices_are_looked_up_for_each_year_in_the_horizon():
     assert len([k for k in financials.price_points(Market(), "X", date(2026, 6, 1)) if k.startswith("year end")]) == 5
 
 
+def test_year_end_prices_follow_the_companys_fiscal_year_ends():
+    # docs/indicator_definitions.md: the median uses the preceding fiscal year-ends. A live Apple run (28 November 2026) used 31
+    # December, where Apple has no balance sheet, so its EV-based history was missing
+    ends = [date(2022, 9, 24), date(2023, 9, 30), date(2024, 9, 28), date(2025, 9, 27), date(2026, 9, 26)]
+    points = financials.price_points(Market(), "X", date(2026, 11, 28), years=3, year_ends=ends)
+    assert sorted(k for k in points if k.startswith("year end")) == ["year end 2024-09-28", "year end 2025-09-27", "year end 2026-09-26"]
+    later = financials.price_points(Market(), "X", date(2026, 9, 1), years=5, year_ends=ends)  # a year end after the analysis date: left out
+    assert "year end 2026-09-26" not in later
+
+
+def test_edgar_figures_keep_their_period_end(tmp_path):
+    from tests.test_edgar import figures_with
+    f, _ = figures_with(tmp_path, lambda gaap, dei: None)
+    assert f[("equity_common", "FY2025")]["end"] == "2025-06-30" and f[("revenue", "FY2025")]["end"] == "2025-06-30"
+
+
 def test_edgar_keeps_one_more_fiscal_year_than_the_horizon(tmp_path):
     e, _ = edgar_for(tmp_path)
     figures = [{"period": f"FY{y}"} for y in range(2010, 2026)] + [{"period": "YTD Q3 2014"}, {"period": "YTD Q3 2015"}]

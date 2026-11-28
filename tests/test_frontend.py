@@ -1,4 +1,4 @@
-# v3 website ("folio."): the page loads with its six sections and the real form controls, unbuilt form fields are disabled and
+# The website: the page loads with its six sections and the real form controls, unbuilt form fields are disabled and
 # labelled, nothing is loaded from outside the project, and the page carries no sample figures of its own.
 import re
 from pathlib import Path
@@ -22,7 +22,7 @@ def page(tmp_path_factory):
 def test_the_page_has_the_six_sections_and_their_menu_items(page):
     for name in PAGES:
         assert f'id="page-{name}"' in page and f'href="#{name}"' in page, name
-    assert "folio" in page and "Three agents. One evidence-led report." in page
+    assert "Financial Report Analysis Agent" in page and "Three agents. One evidence-led report." in page
 
 
 def test_the_real_form_controls_are_present_and_there_is_no_demo_mode(page):
@@ -161,3 +161,85 @@ def test_the_earnings_call_tab_shows_key_points_and_questions_with_answers():
     script = (FRONTEND / "app.js").read_text(encoding="utf-8")
     call = script[script.index("function renderCallTab"):script.index("function disagreementsCard")]
     assert "Questions and answers" in call and "a2.call.questions" in call and '["management", "Key points"]' in script
+
+
+def test_the_tool_is_called_by_its_project_name_not_the_old_placeholder_brand(page):
+    """Decided 28 November 2026: "folio." was a placeholder from the design brief; the project's name replaces it everywhere."""
+    for name in ("index.html", "app.js", "styles.css"):
+        assert "folio" not in (FRONTEND / name).read_text(encoding="utf-8").lower(), name
+    assert "<title>Verity – Financial Report Analysis Agent</title>" in page
+
+
+def test_the_sidebar_shows_the_short_name_and_the_top_bar_the_full_name(page):
+    """Decided 28 November 2026: the agent is called Verity; its full name heads every page."""
+    import re
+    assert re.search(r'<a class="logo"[^>]*>Verity</a>', page)
+    assert re.search(r'<p class="app-title">Financial Report Analysis Agent</p>', page)
+    script = (FRONTEND / "app.js").read_text(encoding="utf-8")
+    assert "breadcrumb" not in script and "breadcrumb" not in page
+
+
+def test_the_dashboard_does_not_label_cards_or_statements_with_agent_names():
+    """Decided 28 November 2026: agent names stay on the Agent workflow page only; elsewhere they overload the page."""
+    script = (FRONTEND / "app.js").read_text(encoding="utf-8")
+    dashboard = script[script.index("function renderDashboard"):script.index("// ---------- final report")]
+    assert "Agent 1" not in dashboard and "Agent 2" not in dashboard and "Agent 3" not in dashboard and "based_on" not in dashboard
+    assert "function basedOnTag" not in script
+
+
+def test_the_tables_show_values_only_and_the_status_appears_when_a_row_is_opened():
+    """Decided 28 November 2026: labels such as "estimated" stay out of the table cells; the row's details give the status."""
+    script = (FRONTEND / "app.js").read_text(encoding="utf-8")
+    card = script[script.index("function groupCard"):script.index("function details(")]
+    assert "statusPill" not in card
+    details = script[script.index("function details("):script.index("function historyAgainstPeersCard")]
+    assert '"Status and notes"' in details
+
+
+def test_each_section_shows_agent3s_headline_and_commentary_with_the_comparisons_on_request():
+    # approved 28 November 2026: the generic "What the comparison shows" heading is replaced by the section's own headline
+    script = (FRONTEND / "app.js").read_text(encoding="utf-8")
+    assert "What the comparison shows" not in script
+    panel = script[script.index("function findingsPanel"):script.index("function renderFinancialsTab")]
+    assert "commentaryFor(group)" in panel and "findings-headline" in panel and "The comparisons in detail" in panel
+    assert "findingsPanel(summary, notes, group)" in script and 'findingsPanel(lines, notes, "Historical comparison")' in script
+    assert 'case "commentary"' in script and '.label === "verified"' in script[script.index("function commentaryFor"):]
+    css = (FRONTEND / "styles.css").read_text(encoding="utf-8")
+    assert ".findings-headline" in css and ".commentary-headline" in css
+
+
+def test_what_the_reports_say_reads_like_a_research_note():
+    # approved 28 November 2026: business and outlook side by side, results grouped by the period they cover, risks as a grid
+    script = (FRONTEND / "app.js").read_text(encoding="utf-8")
+    layout = script[script.index("function byTopic"):script.index("function renderDashboard")]
+    for part in ("note-pair", "notePanel(", "splitPeriod("):
+        assert part in layout, part
+    for part in ("note-period", "risk-grid", "proseItem("):  # in the helpers the layout uses
+        assert part in script, part
+    css = (FRONTEND / "styles.css").read_text(encoding="utf-8")
+    for rule in (".note-pair", ".note-panel", ".note-period", ".risk-grid", ".note-list"):
+        assert rule in css, rule
+
+
+def test_results_read_as_explained_periods_risks_as_titled_cards_and_only_real_disagreements_show():
+    # decided 28 November 2026
+    script = (FRONTEND / "app.js").read_text(encoding="utf-8")
+    layout = script[script.index("function byTopic"):script.index("function renderDashboard")]
+    assert "st.period" in layout and "periodPanel(" in layout and "riskCards(" in layout
+    cards = script[script.index("function riskCards"):]
+    assert "risk-card" in cards and "risk-title" in cards and "risk-number" in cards
+    overview = script[script.index("function renderOverviewTab"):script.index("// ---------- footnotes")]
+    assert "riskCards(" not in overview and "statementList(verifiedFirst(a3.risks)" in overview  # the Overview keeps its plain list
+    disagree = script[script.index("function disagreementsCard"):]
+    assert "!d.note" in disagree[:400]  # older reports: same-source items are not shown
+    css = (FRONTEND / "styles.css").read_text(encoding="utf-8")
+    assert ".risk-card" in css and ".risk-title" in css and ".period-panel" in css
+
+
+def test_the_report_tab_shows_footnote_numbers_and_one_source_list_per_section():
+    # decided 28 November 2026: no source line under every point
+    script = (FRONTEND / "app.js").read_text(encoding="utf-8")
+    blocks = script[script.index("function renderBlock"):script.index("function renderReportTab")]
+    assert 'case "footnotes"' in blocks and "noteMarks(" in blocks and '"report-points"' in blocks and '"Source: "' not in blocks
+    css = (FRONTEND / "styles.css").read_text(encoding="utf-8")
+    assert ".report-notes" in css and "sup.fn-ref" in css

@@ -11,7 +11,7 @@ from tests.sample import data as D
 from tests.helpers import make_settings, sample_app
 
 SECTIONS = ["Executive summary", "Financial summary", "Trading comparables", "Historical valuation", "Financial analysis",
-            "Business overview and outlook", "Earnings call highlights", "Where the sources disagree", "Key risks",
+            "Business overview and outlook", "Earnings call highlights", "Where the sources disagree", "Key risks", "Valuation summary",
             "Appendix A. All indicators", "Appendix B. Indicators by fiscal year", "Appendix C. Sources of the indicators",
             "Appendix D. Not verified", "Appendix E. Missing information", "Appendix F. Methodology and limitations"]
 
@@ -149,3 +149,73 @@ def test_the_fiscal_year_appendix_shows_values_or_a_dash_never_status_words(demo
     rows = {row[0]: row for row in table["rows"]}
     assert "Diluted EPS (USD)" in rows and rows["Diluted EPS (USD)"][-1] != "—"  # the reported value, not "reported only"
     assert all(any(cell != "—" for cell in row[1:]) for row in table["rows"])  # a row with no value in any year is left out
+
+
+def test_the_report_does_not_label_statements_with_agent_names(demo):
+    _, _, report = demo
+    blocks = report_blocks.build(report)["blocks"]
+    tags = [item.get("tag") or "" for b in blocks if b["type"] == "statements" for item in b["items"]]
+    assert not any("Based on" in t or "Agent" in t for t in tags)
+    not_verified = blocks[next(i for i, b in enumerate(blocks) if b.get("text", "").endswith("Not verified")) + 1]
+    assert not any(item.startswith("Agent") for item in not_verified["items"])
+
+
+def test_sections_get_agent3s_commentary_and_the_report_ends_with_a_valuation_summary(demo):
+    # approved 28 November 2026: a headline and paragraph per section (Python lines when there is none), and a Python-decided summary
+    _, _, report = demo
+    blocks = report_blocks.build(report)["blocks"]
+    commentary = [b for b in blocks if b["type"] == "commentary"]
+    assert commentary and all(b["text"] and b["sources"] for b in commentary)
+    assert any(b["headline"] for b in commentary)
+    start = next(i for i, b in enumerate(blocks) if b.get("text", "").endswith("Valuation summary"))
+    end = next(i for i, b in enumerate(blocks) if b.get("text", "").startswith("Appendix A"))
+    summary = [b for b in blocks[start + 1:end] if b["type"] != "footnotes"]  # the section's source list comes last
+    assert summary[0]["style"] == "lead" and summary[0]["text"].startswith("Taken together")
+    table = next(b for b in summary if b["type"] == "table")
+    assert table["columns"][:4] == ["Multiple", "Current", "Peer median", "Against peers"] and "±15%" in table["notes"][0]
+    assert summary[-1]["text"] == "This sums up the comparisons in this report. It is not investment advice."
+    old = copy.deepcopy(report)
+    del old["agent3"]["commentary"]  # a report saved before commentary existed shows the Python lines instead
+    assert not [b for b in report_blocks.build(old)["blocks"] if b["type"] == "commentary"]
+
+
+def test_points_carry_footnote_numbers_and_each_section_ends_with_its_sources(demo):
+    # decided 28 November 2026: no source line under every point; superscript numbers and one short source list per section
+    _, _, report = demo
+    blocks = report_blocks.build(report)["blocks"]
+    start = next(i for i, b in enumerate(blocks) if b.get("text", "").endswith("Executive summary"))
+    end = next(i for i, b in enumerate(blocks) if i > start and b["type"] == "heading" and b["level"] == 2)
+    section = blocks[start:end]
+    items = [item for b in section if b["type"] == "statements" for item in b["items"]]
+    notes = next(b for b in section if b["type"] == "footnotes")
+    assert section[-1] is notes and [n["number"] for n in notes["items"]] == list(range(1, len(notes["items"]) + 1))
+    assert all(item["notes"] for item in items) and {n for item in items for n in item["notes"]} == {n["number"] for n in notes["items"]}
+    texts = [n["text"] for n in notes["items"]]
+    assert len(texts) == len(set(texts))  # a source cited by several points gets one number
+    calculated = [t for t in texts if t.startswith("Company filings and market prices")]
+    assert len(calculated) <= 1 and (not calculated or "calculations in Appendix A, sources in Appendix C" in calculated[0])
+    assert not any(t.startswith("Calculated:") for t in texts)
+    for b in blocks:  # every section with sourced points has its own list, numbered from 1
+        if b["type"] == "footnotes":
+            assert b["items"][0]["number"] == 1
+
+
+def test_notes_use_short_document_names_and_report_wording():
+    # decided 28 November 2026: short names in the notes (the full titles stay in Appendix C), and no "our calculations"
+    short = report_blocks._short_title
+    assert short("10-Q for the period ended 2026-09-30 (filed 2026-10-28)") == "10-Q, quarter ended Sep 2026"
+    assert short("10-K for the period ended 2026-06-30 (filed 2026-07-29)") == "10-K, fiscal year ended Jun 2026"
+    assert short("20-F for the period ended 2025-12-31 (filed 2026-04-02)") == "20-F, fiscal year ended Dec 2025"
+    assert short("Earnings call transcript, MSFT fiscal 2027 Q1 (Alpha Vantage)") == "Q1 FY2027 earnings call"
+    assert short("Annual report FY2025 (demo)") == "Annual report FY2025 (demo)"
+    assert report_blocks._cite({"doc_id": "x", "title": "10-Q for the period ended 2026-09-30 (filed 2026-10-28)", "page": 28})["note"] == (
+        "10-Q, quarter ended Sep 2026, p. 28")
+
+
+def test_the_report_never_says_our_calculations(demo):
+    _, _, report = demo
+    import json
+    text = json.dumps(report_blocks.build(report)).lower()
+    assert "our calculations" not in text and "our work" not in text
+    exhibits = [b for b in report_blocks.build(report)["blocks"] if b["type"] == "table" and b.get("source")]
+    assert all(b["source"].startswith("Source: Company filings") and "Verity" in b["source"] for b in exhibits)

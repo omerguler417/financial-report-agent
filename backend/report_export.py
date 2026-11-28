@@ -29,12 +29,9 @@ def _esc(text) -> str:
     return html.escape(_clean(text), quote=False)
 
 
-def _sources(item: dict) -> str:
-    parts = []
-    for s in item["sources"]:
-        label = _esc(s["text"])
-        parts.append(f'<a href="{html.escape(s["url"])}" color="#2f5d8a">{label}</a>' if s.get("url") else label)
-    return "Source: " + "; ".join(parts)
+def _marks(item: dict) -> str:
+    """Footnote numbers after a point, as superscript."""
+    return f' <super><font size="6.5" color="#2f5d8a">{",".join(str(n) for n in item.get("notes", []))}</font></super>' if item.get("notes") else ""
 
 
 # ---------- PDF ----------
@@ -54,6 +51,10 @@ def _styles() -> dict:
         "source": ParagraphStyle("source", parent=body, fontName="Helvetica-Oblique", fontSize=7, leading=9, textColor=GREY, spaceBefore=2),
         "head": ParagraphStyle("head", parent=body, fontName="Helvetica-Bold", fontSize=6.6, leading=8.5, spaceAfter=0, textColor=colors.white),
         "lead": ParagraphStyle("lead", parent=body, fontName="Helvetica-Bold"),
+        "point": ParagraphStyle("point", parent=body, leftIndent=11, bulletIndent=0, spaceAfter=5),
+        "note": ParagraphStyle("note", parent=body, fontSize=6.8, leading=9, textColor=GREY, spaceAfter=6),
+        "headline": ParagraphStyle("headline", parent=body, fontName="Times-Bold", fontSize=11, leading=14, textColor=NAVY, spaceBefore=2,
+                                   spaceAfter=3),
         "box": ParagraphStyle("box", parent=body, fontSize=8.5, leading=11, spaceAfter=3),
         "subtitle": ParagraphStyle("subtitle", parent=body, fontSize=9, textColor=GREY, spaceAfter=2),
         "num": ParagraphStyle("num", parent=body, fontSize=7.5, leading=9.5, spaceAfter=0, alignment=2),
@@ -125,7 +126,11 @@ def _pdf_flowables(view: dict, st: dict, width: float) -> list:
         elif kind == "paragraph" and out and getattr(out[-1], "style", None) is st["title"]:  # the line under the title
             out.append(Paragraph(_esc(block["text"]), st["subtitle"]))
         elif kind == "paragraph":
-            out.append(Paragraph(_esc(block["text"]), st["lead" if block.get("style") == "lead" else "body"]))
+            out.append(Paragraph(_esc(block["text"]), st[{"lead": "lead", "note": "small"}.get(block.get("style"), "body")]))
+        elif kind == "commentary":  # a section's headline and paragraph, with its footnote numbers
+            if block.get("headline"):
+                out.append(Paragraph(_esc(block["headline"]), st["headline"]))
+            out.append(Paragraph(_esc(block["text"]) + _marks(block), st["body"]))
         elif kind == "statements":
             if not block["items"]:
                 out.append(Paragraph("Nothing to show.", st["small"]))
@@ -133,12 +138,18 @@ def _pdf_flowables(view: dict, st: dict, width: float) -> list:
                 if item.get("tag"):
                     out.append(Paragraph(_esc(item["tag"]), st["tag"]))
                 badge = '<font color="#8a5a00"><b>[Unverified]</b></font> ' if item["label"] == "unverified" else ""
-                out.append(Paragraph(badge + _esc(item["text"]), st["body"]))
-                if item["sources"]:
-                    out.append(Paragraph(_sources(item), st["small"]))
+                out.append(Paragraph(badge + _esc(item["text"]) + _marks(item), st["point"], bulletText="•"))
                 for issue in item["issues"]:
                     out.append(Paragraph(_esc(issue), st["issue"]))
-                out.append(Spacer(1, 3))
+        elif kind == "footnotes":  # the section's sources in one line of small print
+            parts = []
+            for note in block["items"]:
+                text = _esc(note["text"])
+                if note.get("url"):
+                    text = f'<a href="{html.escape(note["url"])}" color="#52606d">{text}</a>'
+                parts.append(f'<super><font color="#2f5d8a"><b>{note["number"]}</b></font></super>&nbsp;{text}')
+            out += [Spacer(1, 2), HRFlowable(width="100%", thickness=0.4, color=RULE, spaceAfter=2),
+                    Paragraph(' <font color="#b6c0cc">·</font> '.join(parts), st["note"])]
         elif kind == "table":
             out += _pdf_table(block, st, width)
         elif kind == "list":
@@ -173,9 +184,12 @@ def to_pdf(view: dict) -> bytes:
         canvas.setStrokeColor(NAVY)
         canvas.setLineWidth(0.6)
         canvas.line(1.8 * cm, A4[1] - 1.5 * cm, A4[0] - 1.8 * cm, A4[1] - 1.5 * cm)
-        canvas.setFont("Times-Bold", 9)
+        canvas.setFont("Times-Bold", 10)
         canvas.setFillColor(NAVY)
-        canvas.drawString(1.8 * cm, A4[1] - 1.3 * cm, "folio.")
+        canvas.drawString(1.8 * cm, A4[1] - 1.3 * cm, "Verity")
+        canvas.setFont("Helvetica", 7)
+        canvas.setFillColor(GREY)
+        canvas.drawString(1.8 * cm + canvas.stringWidth("Verity", "Times-Bold", 10) + 6, A4[1] - 1.3 * cm, "Financial Report Analysis Agent")
         canvas.setFont("Helvetica", 7)
         canvas.setFillColor(GREY)
         canvas.drawRightString(A4[0] - 1.8 * cm, A4[1] - 1.3 * cm, "Company analysis")
@@ -202,6 +216,12 @@ def _run(paragraph, text, bold=False, size=None, color=None):
     return run
 
 
+def _word_marks(paragraph, item: dict):
+    if item.get("notes"):
+        run = _run(paragraph, " " + ",".join(str(n) for n in item["notes"]), size=7, color="2F5D8A")
+        run.font.superscript = True
+
+
 def to_docx(view: dict) -> bytes:
     document = docx.Document()
     document.core_properties.title = view["title"]
@@ -211,6 +231,9 @@ def to_docx(view: dict) -> bytes:
         document.styles[name].font.color.rgb = RGBColor.from_string("0B2545")
     footer = document.sections[0].footer.paragraphs[0]
     _run(footer, FOOTER, size=7, color="52606D")
+    header = document.sections[0].header.paragraphs[0]
+    _run(header, "Verity", bold=True, size=10, color="0B2545")
+    _run(header, "  Financial Report Analysis Agent", size=7.5, color="52606D")
     for block in view["blocks"]:
         kind = block["type"]
         if kind == "heading":
@@ -229,23 +252,36 @@ def to_docx(view: dict) -> bytes:
                 _run(p, f"{label}: ", size=8.5, color="52606D")
                 _run(p, value, bold=True, size=8.5)
             _run(right.add_paragraph(), f"Peers: {block['peers']}", size=8.5)
+        elif kind == "paragraph" and block.get("style") == "note":
+            _run(document.add_paragraph(), block["text"], size=8.5, color="52606D")
         elif kind == "paragraph":
             _run(document.add_paragraph(), block["text"], bold=block.get("style") == "lead")
+        elif kind == "commentary":
+            if block.get("headline"):
+                _run(document.add_paragraph(), block["headline"], bold=True, size=11, color="0B2545")
+            p = document.add_paragraph()
+            _run(p, block["text"])
+            _word_marks(p, block)
         elif kind == "statements":
             if not block["items"]:
                 _run(document.add_paragraph(), "Nothing to show.", size=9, color="52606D")
             for item in block["items"]:
                 if item.get("tag"):
                     _run(document.add_paragraph(), item["tag"], bold=True, size=8, color="52606D")
-                p = document.add_paragraph()
+                p = document.add_paragraph(style="List Bullet")
                 if item["label"] == "unverified":
                     _run(p, "[Unverified] ", bold=True, color="8A5A00")
                 _run(p, item["text"])
-                if item["sources"]:
-                    sources = "; ".join(s["text"] + (f" ({s['url']})" if s.get("url") else "") for s in item["sources"])
-                    _run(document.add_paragraph(), "Source: " + sources, size=8, color="52606D")
+                _word_marks(p, item)
                 for issue in item["issues"]:
                     _run(document.add_paragraph(), issue, size=8.5, color="8A5A00")
+        elif kind == "footnotes":  # one line of small print
+            p = document.add_paragraph()
+            for i, note in enumerate(block["items"]):
+                if i:
+                    _run(p, "  ·  ", size=7.5, color="B6C0CC")
+                _run(p, str(note["number"]), bold=True, size=7, color="2F5D8A").font.superscript = True
+                _run(p, " " + note["text"] + (f" ({note['url']})" if note.get("url") else ""), size=7.5, color="52606D")
         elif kind == "table":
             if block.get("title"):
                 _run(document.add_paragraph(), block["title"], bold=True, size=9, color="0B2545")

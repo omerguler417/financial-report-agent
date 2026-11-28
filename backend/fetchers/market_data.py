@@ -107,7 +107,7 @@ class TwelveDataProvider(PriceProvider):
 
     def _fetch(self, ticker: str, start: date, end: date, adjust: str) -> dict:
         response = self.client.get(f"{self.base}/time_series",
-                                   params={"symbol": ticker, "interval": "1day", "start_date": start.isoformat(), "end_date": end.isoformat(),
+                                   params={"symbol": ticker.replace("-", "."), "interval": "1day",  # share classes: BF-B is BF.B here "start_date": start.isoformat(), "end_date": end.isoformat(),
                                            "adjust": adjust, "order": "ASC", "outputsize": 5000},
                                    headers={"Authorization": f"apikey {self.settings.market_data_api_key}"})
         body = response.json()
