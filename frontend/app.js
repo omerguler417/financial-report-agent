@@ -1265,7 +1265,7 @@ function questionsCard() {  // the user's own questions, shown on the Overview o
 
 function disagreementsCard() {  // shown on the Overview only when there are any
   const a3 = S.report.agent3;
-  const real = a3.disagreements.filter((d) => !d.note);  // older reports kept same-source items with a note
+  const real = a3.disagreements.filter((d) => !d.note && d.positions.length >= 2);  // older reports kept other items
   if (!real.length) return null;
   const box = card("Where the sources disagree");
   const notes = footnotes();

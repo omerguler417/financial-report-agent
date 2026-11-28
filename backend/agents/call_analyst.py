@@ -81,7 +81,7 @@ TURN_HEADER = re.compile(r"^Turn \d+ of \d+ · (.+?)(?: \((.+)\))?$")  # the fir
 
 def _person(name: str) -> str:
     """The person in a speaker label: "Satya Nadella (Chairman and CEO)" and "Adam Wood with Morgan Stanley" give the name only."""
-    return re.split(r"\s*\(|\s+(?:with|from|at)\s+", name, maxsplit=1)[0].strip()
+    return re.split(r"\s*\(|\s+(?:with|from|at|of)\s+", name, maxsplit=1)[0].strip()
 
 
 def _same_person(name: str, who: str) -> bool:

@@ -29,6 +29,13 @@ def display(value, unit) -> str:
     return _number(value, unit)
 
 
+def model_name(result: dict) -> str:
+    """An indicator's name as the text model sees it: a peer median says it is the peers' figure, so it is never quoted as the
+    company's own (a live run quoted the peers' "P/FCF historical median" as Apple's)."""
+    name = result.get("name") or result.get("indicator")
+    return f"Peers' median: {name.removesuffix(' peer median')}" if result.get("period") == "peer median" else name
+
+
 def _link(url):
     return url if isinstance(url, str) and url.startswith(("http://", "https://")) else None
 
@@ -307,7 +314,7 @@ def build(report: dict) -> dict:
                                                         _statement(q["answer"], f"Answer · {q['answered_by']}"))]})
 
     section("Where the sources disagree")
-    real = [d for d in a3["disagreements"] if not d.get("note")]  # reports saved earlier kept same-source items with a note
+    real = [d for d in a3["disagreements"] if not d.get("note") and len(d["positions"]) >= 2]  # earlier reports kept other items
     if not real:
         blocks.append({"type": "paragraph", "text": "No disagreements were identified."})
     for d in real:

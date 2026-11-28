@@ -399,3 +399,20 @@ def test_a_citation_written_as_text_inside_the_indicator_field_is_read():
         assert s["citations"][0]["indicator"] == "pe"
     [s] = V.check_statements([statement("The P/E is 9.73x.", {"indicator": "{'indicator': 'nonsense'}"})], READ, RESULTS, "TTM to Q3 2026")
     assert not s["verified"]  # an unknown indicator is still no source
+
+
+def test_a_citation_nested_as_an_object_inside_the_indicator_field_is_read():
+    # hotspot Apple run (28 November 2026): {"indicator": {"indicator": "pe", "period": "TTM to Q3 2026"}}
+    [s] = V.check_statements([statement("The P/E is 9.73x.", {"indicator": {"indicator": "pe", "period": "TTM to Q3 2026"}})], READ, RESULTS,
+                             "TTM to Q3 2026")
+    assert s["verified"], s["issues"]
+
+
+def test_a_cited_year_inside_a_current_results_range_finds_it():
+    # hotspot Apple run: revenue CAGR "FY2021–FY2026" cited as {"indicator": "revenue_cagr", "period": "FY2026"}
+    results = RESULTS + [{"indicator": "revenue_cagr", "period": "FY2021–FY2026", "value": 0.0553, "unit": "fraction", "current": True},
+                         {"indicator": "revenue_cagr", "period": "FY2015–FY2020", "value": 0.0553, "unit": "fraction"}]
+    [s] = V.check_statements([statement("Revenue CAGR was 5.53%.", {"indicator": "revenue_cagr", "period": "FY2026"})], READ, results, "FY2026")
+    assert s["verified"], s["issues"]
+    [s] = V.check_statements([statement("Revenue CAGR was 5.53%.", {"indicator": "revenue_cagr", "period": "FY2018"})], READ, results, "FY2026")
+    assert not s["verified"]  # a year outside the current result's range is not this result

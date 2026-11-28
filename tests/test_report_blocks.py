@@ -219,3 +219,13 @@ def test_the_report_never_says_our_calculations(demo):
     assert "our calculations" not in text and "our work" not in text
     exhibits = [b for b in report_blocks.build(report)["blocks"] if b["type"] == "table" and b.get("source")]
     assert all(b["source"].startswith("Source: Company filings") and "Verity" in b["source"] for b in exhibits)
+
+
+def test_a_saved_single_position_disagreement_is_not_shown(demo):
+    # reports saved before 28 November 2026 evening may hold one; the report shows only disagreements with two positions or more
+    _, _, report = demo
+    old = copy.deepcopy(report)
+    old["agent3"]["disagreements"] = [{"topic": "None", "positions": [dict(report["agent3"]["disagreements"][0]["positions"][0])]}]
+    blocks = report_blocks.build(old)["blocks"]
+    assert "None" not in [b.get("text") for b in blocks if b["type"] == "heading"]
+    assert "No disagreements were identified." in [b.get("text") for b in blocks]

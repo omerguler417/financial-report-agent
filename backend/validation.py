@@ -178,7 +178,10 @@ def _find_result(citation: dict, results: list[dict], current_period: str | None
         exact = next((r for r in matches if r["period"] == period), None)
         starts = [r for r in matches if str(r["period"]).startswith(f"{period} vs ")]  # "FY2026" for "FY2026 vs FY2025"
         one = len({r["period"] for r in starts}) == 1  # the same result may be listed twice (current and history)
-        return exact or (next((r for r in starts if r.get("current")), starts[0]) if starts and one else None)
+        if exact or (starts and one):
+            return exact or next((r for r in starts if r.get("current")), starts[0])
+        within = {r["period"]: r for r in matches if r.get("current") and re.search(rf"(?<![\w]){re.escape(period)}(?![\w])", str(r["period"]))}
+        return next(iter(within.values())) if len(within) == 1 else None  # "FY2026" for the current "FY2021–FY2026"
     current = [r for r in matches if r["period"] == current_period] if current_period else []
     if current:
         return current[0]
@@ -193,6 +196,9 @@ WRAPPED = re.compile(r"""['"]indicator['"]\s*:\s*['"]([^'"]+)['"](?:\s*,\s*['"]p
 
 def _unwrapped(c):
     """A citation the model wrote as text inside the indicator field ("{'indicator': 'pe', 'period': 'FY2026'}") as an object."""
+    if isinstance(c, dict) and isinstance(c.get("indicator"), dict):  # the citation object nested inside the indicator field
+        inner = c["indicator"]
+        return {"indicator": str(inner.get("indicator", "")), **({"period": inner["period"]} if inner.get("period") else {})}
     if isinstance(c, dict) and isinstance(c.get("indicator"), str) and (m := WRAPPED.search(c["indicator"])):
         return {"indicator": m.group(1), **({"period": m.group(2)} if m.group(2) else {})}
     return c

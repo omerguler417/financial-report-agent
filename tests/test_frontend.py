@@ -243,3 +243,9 @@ def test_the_report_tab_shows_footnote_numbers_and_one_source_list_per_section()
     assert 'case "footnotes"' in blocks and "noteMarks(" in blocks and '"report-points"' in blocks and '"Source: "' not in blocks
     css = (FRONTEND / "styles.css").read_text(encoding="utf-8")
     assert ".report-notes" in css and "sup.fn-ref" in css
+
+
+def test_the_overview_shows_only_disagreements_with_two_positions():
+    script = (FRONTEND / "app.js").read_text(encoding="utf-8")
+    card = script[script.index("function disagreementsCard"):]
+    assert "d.positions.length >= 2" in card[:500]

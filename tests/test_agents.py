@@ -224,6 +224,27 @@ def test_the_holiday_warning_follows_the_exchange_the_prices_came_from():
     assert not any("holidays" in x for x in agent3._limitations(company, {"indicators": {}}))  # no price, no price check
 
 
+def test_the_valuation_explanation_may_quote_the_sections_it_sums_up(tmp_path):
+    # hotspot Apple run (28 November 2026): "8 of 9 valuation measures are above the peer median" (the Valuation section's count)
+    services, context = demo_services(), {}
+    peers = choose_peers(D.TARGET, services, make_settings(tmp_path))
+    a1 = agent1.run(COMPANY, peers, services, ON, context)
+    a2 = agent2.run(COMPANY, services, ON, context)
+    original = services.model.ask
+
+    def answer(task, data):
+        out = original(task, data)
+        if task == "write_commentary":
+            line = next(x for x in data["sections"] if x["group"] == "Valuation")["lines"][0]
+            out["valuation"] = [{"text": f"The summary rests on the comparisons: {line}", "citations": [data["valuation_summary"]["cite_as"]]}]
+        return out
+    services.model.ask = answer
+    a3 = agent3.run({**COMPANY, "exchange": "NYSE"}, a1, a2, services, context)
+    [s] = a3["commentary"]["valuation"]
+    assert s["verified"], s["issues"]
+    assert s["citations"] and all("indicator" in c for c in s["citations"])
+
+
 def data_group(a3):
     return next(iter(a3["commentary"]["sections"]))
 
@@ -248,6 +269,48 @@ def test_only_real_disagreements_between_different_sources_are_kept(tmp_path):
     a3 = agent3.run({**COMPANY, "exchange": "NYSE"}, a1, a2, services, context)
     assert "Same source" not in [d["topic"] for d in a3["disagreements"]] and a3["disagreements"]
     assert all("note" not in d for d in a3["disagreements"])
+
+
+def test_the_model_sees_peer_medians_named_as_the_peers(tmp_path):
+    # final Apple runs (28 November 2026): "P/FCF historical median" with period "peer median" was quoted as Apple's own
+    services, context = demo_services(), {}
+    asked = []
+    original = services.model.ask
+
+    def recording(task, data):
+        asked.append((task, data))
+        return original(task, data)
+    services.model.ask = recording
+    peers = choose_peers(D.TARGET, services, make_settings(tmp_path))
+    a1 = agent1.run(COMPANY, peers, services, ON, context)
+    a2 = agent2.run(COMPANY, services, ON, context)
+    agent3.run({**COMPANY, "exchange": "NYSE"}, a1, a2, services, context)
+    for task, data in asked:
+        for row in data.get("indicators", []):
+            if row["period"] == "peer median":
+                assert row["name"].startswith("Peers' median: "), (task, row["name"])
+            else:
+                assert not row["name"].startswith("Peers"), (task, row["name"])
+
+
+def test_a_single_position_is_not_a_disagreement(tmp_path):
+    # final Microsoft run (28 November 2026): topic "None", one position "No material disagreement identified" citing two sources
+    services, context = demo_services(), {}
+    peers = choose_peers(D.TARGET, services, make_settings(tmp_path))
+    a1 = agent1.run(COMPANY, peers, services, ON, context)
+    a2 = agent2.run(COMPANY, services, ON, context)
+    original = services.model.ask
+
+    def answer(task, data):
+        out = original(task, data)
+        if task == "combine_report":
+            both = out["disagreements"][0]["positions"][1]["citations"] + out["disagreements"][0]["positions"][2]["citations"]
+            out["disagreements"].append({"topic": "None", "positions": [
+                {"who": "No material disagreement identified", "text": "The reports and the call are broadly aligned.", "citations": both}]})
+        return out
+    services.model.ask = answer
+    a3 = agent3.run({**COMPANY, "exchange": "NYSE"}, a1, a2, services, context)
+    assert "None" not in [d["topic"] for d in a3["disagreements"]] and all(len(d["positions"]) >= 2 for d in a3["disagreements"])
 
 
 def test_results_carry_their_period_and_risks_a_short_title():
@@ -419,6 +482,8 @@ def test_an_analyst_named_with_the_firm_is_matched_by_name():
     agent2._check_speaker(asked, "Adam Wood with Morgan Stanley", read)
     assert asked["verified"], asked["issues"]
     assert agent2._official("Adam Wood with Morgan Stanley", [{"doc_id": "call", "page": 1}], read, with_title=False) == "Adam Wood"
+    for written in ("Adam Wood of Morgan Stanley", "Adam Wood from Morgan Stanley"):  # hotspot Apple run: "Michael Ng of Goldman Sachs"
+        assert agent2._person(written) == "Adam Wood"
 
 
 def test_a_short_first_name_matches_the_full_name_in_the_transcript():

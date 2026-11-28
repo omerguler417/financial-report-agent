@@ -21,7 +21,8 @@ def _payload(company: dict, agent1: dict, agent2: dict, results: list[dict]) -> 
     return {
         "ticker": company["ticker"], "company": company["name"],
         "agent1_summary": [{"text": s["text"], "citations": s["citations"]} for s in agent1["summary"] if s["verified"]],
-        "indicators": [{**{k: r.get(k) for k in ("indicator", "name", "period", "status")}, "value": report_blocks.display(r.get("value"), r.get("unit")),
+        "indicators": [{**{k: r.get(k) for k in ("indicator", "name", "period", "status")}, "name": report_blocks.model_name(r),
+                        "value": report_blocks.display(r.get("value"), r.get("unit")),
                         "cite_as": {"indicator": r.get("indicator"), "period": r.get("period")}}
                        for r in results if r["period"] in (current, "peer median")],
         "call": [{k: s.get(k) for k in ("kind", "speaker", "text", "citations")} for s in agent2["call"]["statements"] if s["verified"]],
@@ -92,7 +93,8 @@ def answer_questions(company: dict, questions: list[str], payload: dict, service
     return out
 
 
-LINES_DOC = "comparison-lines"  # the Python comparison lines, shown to the checker as one page per section
+LINES_DOC = "comparison-lines"
+SUMMED_UP = ("Valuation", "Historical comparison")  # the Python comparison lines, shown to the checker as one page per section
 
 
 def _with_period(citation, section_cites: list[dict]):
@@ -113,9 +115,12 @@ def write_commentary(company: dict, agent1: dict, services, read: dict, results:
     if not groups:
         return {"sections": {}, "valuation": []}
     pages = [Page(i + 1, " ".join(line["text"] for line in g["lines"]), f"section {i + 1}") for i, g in enumerate(groups)]
-    pages.append(Page(len(pages) + 1, " ".join([p["text"] for p in valuation["parts"]] + [valuation["overall"]]), "valuation summary"))
+    summed = [g for g in groups if g["group"] in SUMMED_UP]  # the valuation explanation may draw on the sections it sums up
+    pages.append(Page(len(pages) + 1, " ".join([p["text"] for p in valuation["parts"]] + [valuation["overall"]]
+                                               + [line["text"] for g in summed for line in g["lines"]]), "valuation summary"))
     lines_read = {**read, LINES_DOC: {"doc": {"title": "Comparison lines"}, "pages": pages}}
-    behind = [[c for line in g["lines"] for c in line["cites"]] for g in groups] + [[c for p in valuation["parts"] for c in p["cites"]]]
+    behind = ([[c for line in g["lines"] for c in line["cites"]] for g in groups]
+              + [[c for p in valuation["parts"] for c in p["cites"]] + [c for g in summed for line in g["lines"] for c in line["cites"]]])
     names = {(r["indicator"], r["period"]): r.get("name") for r in results}
 
     def checked(statements, section: int) -> list[dict]:
@@ -173,7 +178,7 @@ def run(company: dict, agent1: dict, agent2: dict, services, context: dict, ques
         positions = check(d.get("positions"))
         if not positions:  # a topic with no positions is not a disagreement (for example "there are no disagreements")
             continue
-        if len({o for p in positions for o in p["based_on"]}) < 2:  # one source does not disagree with itself
+        if len(positions) < 2 or len({o for p in positions for o in p["based_on"]}) < 2:  # one position, or one source, is no disagreement
             continue
         disagreements.append({"topic": str(d.get("topic", "")), "positions": positions})
 
